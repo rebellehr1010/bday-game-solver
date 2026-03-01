@@ -68,7 +68,9 @@ class GameGUI:
 
         # Score display
         self.score_label = ttk.Label(
-            control_frame, text="Score: 0 | Turn: 1", font=("Arial", 12)
+            control_frame,
+            text="Score: 0 | Turn: 1 | Harvest: 0 | Normal Collected: 0",
+            font=("Arial", 12),
         )
         self.score_label.pack(side=tk.LEFT, padx=20)
 
@@ -86,6 +88,10 @@ class GameGUI:
             control_frame, text="Execute Turn", command=self._execute_turn
         )
         self.execute_turn_button.pack(side=tk.LEFT, padx=5)
+        self.harvest_button = ttk.Button(
+            control_frame, text="Use Harvest", command=self._use_harvest
+        )
+        self.harvest_button.pack(side=tk.LEFT, padx=5)
         self.finish_placement_button = ttk.Button(
             control_frame,
             text="Finish Placement",
@@ -294,6 +300,7 @@ class GameGUI:
         self.hotbar_label.config(text="Hotbar (Setup Mode)")
         self._set_hotbar_allowed_items(None)
         self.finish_placement_button.pack_forget()
+        self.harvest_button.config(state=tk.NORMAL)
         messagebox.showinfo(
             "Game Started", "Game started! Find paths and execute turns."
         )
@@ -304,13 +311,26 @@ class GameGUI:
             messagebox.showwarning("Not in Play Mode", "Start the game first!")
             return
 
-        path, score, resources = self.solver.find_optimal_path()
+        action, path, score, resources = self.solver.find_optimal_path()
+        if action == "harvest":
+            self.optimal_path = []
+            self.current_path = []
+            self._draw_grid()
+            messagebox.showinfo(
+                "Optimal Move",
+                f"Recommended action: HARVEST\n"
+                f"Expected points: {score}\n"
+                f"Expected resources collected: {resources}",
+            )
+            return
+
         self.optimal_path = path
         self.current_path = path.copy()
         self._draw_grid()
         messagebox.showinfo(
-            "Optimal Path",
-            f"Found path with {score} points ({resources} resources, {len(path) - 1} moves)",
+            "Optimal Move",
+            f"Recommended action: PATH\n"
+            f"Expected points: {score} ({resources} resources, {len(path) - 1} moves)",
         )
 
     def _clear_path(self) -> None:
@@ -363,6 +383,35 @@ class GameGUI:
             # Enter post-turn placement mode using hotbar
             self._enter_post_turn_placement()
 
+    def _use_harvest(self) -> None:
+        """Use a harvest charge at the start of turn."""
+        if self.mode != "play":
+            messagebox.showwarning("Not in Play Mode", "Start the game first!")
+            return
+
+        self.game_state.refresh_harvest_charges()
+        if self.game_state.harvest_charges <= 0:
+            messagebox.showwarning("No Charges", "No harvest charges available.")
+            return
+
+        points, resources, resource_type = self.game_state.execute_harvest()
+        resource_name = resource_type.name if resource_type is not None else "NONE"
+
+        self.current_path = []
+        self.optimal_path = []
+        self.game_state.apply_gravity()
+        self._draw_grid()
+        self._update_score()
+
+        messagebox.showinfo(
+            "Harvest Used",
+            f"Harvested: {resource_name}\n"
+            f"Resources collected: {resources}\n"
+            f"Points earned: {points}",
+        )
+
+        self._enter_post_turn_placement()
+
     def _enter_post_turn_placement(self) -> None:
         """Switch to post-turn placement mode with hotbar."""
         self.mode = "post_turn"
@@ -373,6 +422,7 @@ class GameGUI:
         self._set_hotbar_allowed_items(None)
         self.finish_placement_button.pack(side=tk.LEFT, padx=5)
         self.execute_turn_button.config(state=tk.DISABLED)
+        self.harvest_button.config(state=tk.DISABLED)
         messagebox.showinfo(
             "Post-Turn Placement",
             "Use the hotbar to edit the board. Click Finish Placement when done.",
@@ -390,6 +440,7 @@ class GameGUI:
         self._set_hotbar_allowed_items({CellType.JELLY})
         self.finish_placement_button.pack_forget()
         self.execute_turn_button.config(state=tk.DISABLED)
+        self.harvest_button.config(state=tk.DISABLED)
 
     def _place_jelly_at(self, row: int, col: int) -> None:
         """Place the pending jelly, apply gravity, then enter post-turn placement."""
@@ -420,13 +471,18 @@ class GameGUI:
         self.hotbar_frame.pack_forget()
         self.finish_placement_button.pack_forget()
         self.execute_turn_button.config(state=tk.NORMAL)
+        self.harvest_button.config(state=tk.NORMAL)
         self._set_hotbar_allowed_items(None)
         self._draw_grid()
 
     def _update_score(self) -> None:
         """Update the score display label."""
         self.score_label.config(
-            text=f"Score: {self.game_state.score} | Turn: {self.game_state.turn}"
+            text=(
+                f"Score: {self.game_state.score} | Turn: {self.game_state.turn} | "
+                f"Harvest: {self.game_state.harvest_charges} | "
+                f"Normal Collected: {self.game_state.total_normal_resources_collected}"
+            )
         )
 
     def _reset_game(self) -> None:
@@ -447,5 +503,6 @@ class GameGUI:
             self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
         self.finish_placement_button.pack_forget()
         self.execute_turn_button.config(state=tk.NORMAL)
+        self.harvest_button.config(state=tk.NORMAL)
 
         self._draw_grid()

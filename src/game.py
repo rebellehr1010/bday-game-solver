@@ -18,6 +18,41 @@ class GameState:
         self.score = 0
         self.turn = 1
         self.jellies: Set[Tuple[int, int]] = set()  # Track jelly positions
+        self.total_normal_resources_collected = 0
+        self.harvest_uses = 0
+        self.harvest_charges = 0
+
+    def _recalculate_harvest_charges(self) -> None:
+        """Recalculate currently available harvest charges."""
+        earned_charges = (
+            self.total_normal_resources_collected
+            // GameConfig.HARVEST_RESOURCES_PER_CHARGE
+        )
+        available = earned_charges - self.harvest_uses
+        self.harvest_charges = max(0, min(GameConfig.MAX_HARVEST_CHARGES, available))
+
+    def refresh_harvest_charges(self) -> None:
+        """Public wrapper to refresh harvest charges."""
+        self._recalculate_harvest_charges()
+
+    def get_most_abundant_resource(self) -> Tuple[Optional[CellType], int]:
+        """Return (resource_type, count) for the most abundant standard resource."""
+        counts = {resource: 0 for resource in RESOURCE_TYPES}
+        for row in range(self.grid_size):
+            for col in range(self.grid_size):
+                cell = self.grid[row][col]
+                if cell in counts:
+                    counts[cell] += 1
+
+        best_resource = None
+        best_count = 0
+        for resource in RESOURCE_TYPES:
+            count = counts[resource]
+            if count > best_count:
+                best_count = count
+                best_resource = resource
+
+        return best_resource, best_count
 
     def is_valid_position(self, row: int, col: int) -> bool:
         """Check if position is within grid bounds."""
@@ -144,11 +179,45 @@ class GameState:
         self.player_pos = path[-1]
         self.score += points
         self.turn += 1
+        self.total_normal_resources_collected += resources_count
+        self._recalculate_harvest_charges()
 
         # Check if we collected 10+ resources; if so, a jelly must be placed
         jelly_pending = resources_count >= GameConfig.RESOURCES_FOR_JELLY
 
         return points, resources_count, jelly_pending
+
+    def execute_harvest(self) -> Tuple[int, int, Optional[CellType]]:
+        """
+        Use one harvest charge to collect all tiles of the most abundant resource.
+
+        Returns:
+            (points_earned, resources_collected_count, harvested_resource_type)
+        """
+        self._recalculate_harvest_charges()
+        if self.harvest_charges <= 0:
+            return 0, 0, None
+
+        target_resource, count = self.get_most_abundant_resource()
+
+        if target_resource is None or count == 0:
+            self.harvest_uses += 1
+            self._recalculate_harvest_charges()
+            self.turn += 1
+            return 0, 0, None
+
+        for row in range(self.grid_size):
+            for col in range(self.grid_size):
+                if self.grid[row][col] == target_resource:
+                    self.grid[row][col] = CellType.EMPTY
+
+        points = count * 50
+        self.score += points
+        self.turn += 1
+        self.harvest_uses += 1
+        self._recalculate_harvest_charges()
+
+        return points, count, target_resource
 
     def apply_gravity(self) -> None:
         """Apply gravity to make resources fall down in columns."""
@@ -209,4 +278,9 @@ class GameState:
         new_state.score = self.score
         new_state.turn = self.turn
         new_state.jellies = self.jellies.copy()
+        new_state.total_normal_resources_collected = (
+            self.total_normal_resources_collected
+        )
+        new_state.harvest_uses = self.harvest_uses
+        new_state.harvest_charges = self.harvest_charges
         return new_state

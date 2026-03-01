@@ -62,6 +62,8 @@ class GameConfig:
     PLAYER_START_POS = (6, 3)  # Middle bottom (row, col)
     CELL_SIZE = 60
     RESOURCES_FOR_JELLY = 10  # Resources needed per turn to spawn jelly
+    HARVEST_RESOURCES_PER_CHARGE = 50
+    MAX_HARVEST_CHARGES = 3
 
 
 class Hotbar:
