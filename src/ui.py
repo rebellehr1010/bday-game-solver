@@ -21,7 +21,7 @@ class GameGUI:
         self.hotbar = Hotbar()
 
         self.cell_size = GameConfig.CELL_SIZE
-        self.mode = "setup"  # setup or play
+        self.mode = "setup"  # setup, play, post_turn
         self.current_path: List[Tuple[int, int]] = []
         self.optimal_path: List[Tuple[int, int]] = []
 
@@ -82,9 +82,17 @@ class GameGUI:
         ttk.Button(control_frame, text="Clear Path", command=self._clear_path).pack(
             side=tk.LEFT, padx=5
         )
-        ttk.Button(control_frame, text="Execute Turn", command=self._execute_turn).pack(
-            side=tk.LEFT, padx=5
+        self.execute_turn_button = ttk.Button(
+            control_frame, text="Execute Turn", command=self._execute_turn
         )
+        self.execute_turn_button.pack(side=tk.LEFT, padx=5)
+        self.finish_placement_button = ttk.Button(
+            control_frame,
+            text="Finish Placement",
+            command=self._finish_post_turn_placement,
+        )
+        self.finish_placement_button.pack(side=tk.LEFT, padx=5)
+        self.finish_placement_button.pack_forget()
         ttk.Button(control_frame, text="Reset", command=self._reset_game).pack(
             side=tk.LEFT, padx=5
         )
@@ -95,10 +103,10 @@ class GameGUI:
         hotbar_panel.pack(side=tk.TOP, padx=10, pady=10, fill=tk.X)
 
         # Hotbar label
-        hotbar_label = ttk.Label(
+        self.hotbar_label = ttk.Label(
             hotbar_panel, text="Hotbar (Setup Mode)", font=("Arial", 11, "bold")
         )
-        hotbar_label.pack(anchor="w", pady=(0, 5))
+        self.hotbar_label.pack(anchor="w", pady=(0, 5))
 
         # Hotbar buttons frame
         self.hotbar_frame = ttk.Frame(hotbar_panel)
@@ -131,7 +139,7 @@ class GameGUI:
 
     def _select_hotbar_item(self, item: CellType) -> None:
         """Handle hotbar item selection."""
-        if self.mode == "setup":
+        if self.mode in {"setup", "post_turn"}:
             self.hotbar.select(item)
             self._highlight_selected_hotbar()
 
@@ -221,9 +229,11 @@ class GameGUI:
         if not (0 <= row < GameConfig.GRID_SIZE and 0 <= col < GameConfig.GRID_SIZE):
             return
 
-        if self.mode == "setup":
+        if self.mode in {"setup", "post_turn"}:
             # Place selected hotbar item
             selected = self.hotbar.get_selected()
+            if self.game_state.grid[row][col] == CellType.JELLY:
+                self.game_state.jellies.discard((row, col))
             self.game_state.grid[row][col] = selected
             if selected == CellType.JELLY:
                 self.game_state.jellies.add((row, col))
@@ -267,6 +277,8 @@ class GameGUI:
         self.mode = "play"
         self.mode_label.config(text="Mode: PLAY")
         self.hotbar_frame.pack_forget()  # Hide hotbar in play mode
+        self.hotbar_label.config(text="Hotbar (Setup Mode)")
+        self.finish_placement_button.pack_forget()
         messagebox.showinfo(
             "Game Started", "Game started! Find paths and execute turns."
         )
@@ -324,60 +336,34 @@ class GameGUI:
         self._draw_grid()
         self._update_score()
 
-        # Prompt for new resources
-        self._prompt_new_resources()
+        # Enter post-turn placement mode using hotbar
+        self._enter_post_turn_placement()
 
-    def _prompt_new_resources(self) -> None:
-        """Dialog to input new resources that appear after gravity."""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("New Resources")
-        dialog.geometry("400x300")
+    def _enter_post_turn_placement(self) -> None:
+        """Switch to post-turn placement mode with hotbar."""
+        self.mode = "post_turn"
+        self.mode_label.config(text="Mode: POST-TURN")
+        self.hotbar_label.config(text="Hotbar (Post-Turn Placement)")
+        if not self.hotbar_frame.winfo_viewable():
+            self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
+        self.finish_placement_button.pack(side=tk.LEFT, padx=5)
+        self.execute_turn_button.config(state=tk.DISABLED)
+        messagebox.showinfo(
+            "Post-Turn Placement",
+            "Use the hotbar to edit the board. Click Finish Placement when done.",
+        )
 
-        ttk.Label(
-            dialog,
-            text="Enter new resources (format: row,col,LIGHT_BLUE|YELLOW|etc)",
-            font=("Arial", 10),
-        ).pack(pady=10)
-
-        text_widget = tk.Text(dialog, width=40, height=10)
-        text_widget.pack(pady=10, padx=10)
-
-        def apply_resources():
-            content = text_widget.get("1.0", tk.END).strip()
-            if not content:
-                dialog.destroy()
-                return
-
-            for line in content.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    parts = line.split(",")
-                    row = int(parts[0].strip())
-                    col = int(parts[1].strip())
-                    color_name = parts[2].strip()
-
-                    # Convert name to CellType
-                    try:
-                        cell_type = CellType[color_name]
-                        self.game_state.grid[row][col] = cell_type
-                        if cell_type == CellType.JELLY:
-                            self.game_state.jellies.add((row, col))
-                    except KeyError:
-                        messagebox.showerror(
-                            "Invalid Color", f"Unknown color: {color_name}"
-                        )
-                        return
-                except Exception as e:
-                    messagebox.showerror("Parse Error", f"Could not parse line: {line}")
-                    return
-
-            dialog.destroy()
-            self._draw_grid()
-
-        ttk.Button(dialog, text="Apply", command=apply_resources).pack(pady=5)
-        ttk.Button(dialog, text="Skip", command=dialog.destroy).pack(pady=5)
+    def _finish_post_turn_placement(self) -> None:
+        """Exit post-turn placement mode and return to play."""
+        if self.mode != "post_turn":
+            return
+        self.mode = "play"
+        self.mode_label.config(text="Mode: PLAY")
+        self.hotbar_label.config(text="Hotbar (Setup Mode)")
+        self.hotbar_frame.pack_forget()
+        self.finish_placement_button.pack_forget()
+        self.execute_turn_button.config(state=tk.NORMAL)
+        self._draw_grid()
 
     def _update_score(self) -> None:
         """Update the score display label."""
@@ -392,6 +378,7 @@ class GameGUI:
         self.hotbar = Hotbar()
         self.mode = "setup"
         self.mode_label.config(text="Mode: SETUP")
+        self.hotbar_label.config(text="Hotbar (Setup Mode)")
         self.current_path = []
         self.optimal_path = []
         self._update_score()
@@ -399,5 +386,7 @@ class GameGUI:
         # Show hotbar again
         if not self.hotbar_frame.winfo_viewable():
             self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
+        self.finish_placement_button.pack_forget()
+        self.execute_turn_button.config(state=tk.NORMAL)
 
         self._draw_grid()
