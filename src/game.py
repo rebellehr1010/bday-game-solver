@@ -168,6 +168,7 @@ class GameState:
 
     def apply_gravity(self) -> None:
         """Apply gravity to make resources fall down in columns."""
+        player_row, player_col = self.player_pos
         for col in range(self.grid_size):
             # Collect non-blocked, non-empty cells from bottom to top
             stable_cells = []
@@ -184,12 +185,26 @@ class GameState:
             # Place stable cells from bottom up
             row = self.grid_size - 1
             for cell in stable_cells:
-                # Find next available spot from bottom
-                while row >= 0 and self.grid[row][col] != CellType.EMPTY:
-                    row -= 1
+                # Find next available spot from bottom (skip player tile)
+                while row >= 0:
+                    if self.grid[row][col] == CellType.BLOCKED:
+                        row -= 1
+                        continue
+                    if col == player_col and row == player_row:
+                        row -= 1
+                        continue
+                    break
                 if row >= 0:
                     self.grid[row][col] = cell
                     row -= 1
+
+        # Ensure player tile is empty and rebuild jelly positions
+        self.grid[player_row][player_col] = CellType.EMPTY
+        self.jellies = set()
+        for row in range(self.grid_size):
+            for col in range(self.grid_size):
+                if self.grid[row][col] == CellType.JELLY:
+                    self.jellies.add((row, col))
 
     def copy(self) -> "GameState":
         """Create a deep copy of the game state (for solver simulations)."""
