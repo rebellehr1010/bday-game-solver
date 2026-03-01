@@ -1,0 +1,1 @@
+"""Birthday Game Solver package."""

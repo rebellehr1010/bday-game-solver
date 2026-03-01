@@ -1,4 +1,4 @@
-"""GUI implementation with hotbar and grid rendering."""
+"""GUI implementation with hotbar below the grid."""
 
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -33,13 +33,13 @@ class GameGUI:
         # Control panel (top)
         self._create_control_panel()
 
-        # Main content frame
+        # Main content frame - vertical layout (grid on top, hotbar below)
         content_frame = ttk.Frame(self.root)
         content_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
 
-        # Canvas on left
+        # Canvas (grid) on top
         canvas_frame = ttk.Frame(content_frame)
-        canvas_frame.pack(side=tk.LEFT, padx=10, pady=10)
+        canvas_frame.pack(side=tk.TOP, padx=10, pady=10)
 
         self.canvas = tk.Canvas(
             canvas_frame,
@@ -52,8 +52,8 @@ class GameGUI:
         self.canvas.bind("<Button-1>", self._on_canvas_click)
         self.canvas.bind("<Button-3>", self._on_canvas_right_click)
 
-        # Info panel on right
-        self._create_info_panel(content_frame)
+        # Hotbar frame on bottom
+        self._create_hotbar_panel(content_frame)
 
     def _create_control_panel(self) -> None:
         """Create the top control panel with mode indicator and buttons."""
@@ -89,45 +89,22 @@ class GameGUI:
             side=tk.LEFT, padx=5
         )
 
-    def _create_info_panel(self, parent) -> None:
-        """Create the right-side info panel with hotbar and instructions."""
-        info_frame = ttk.Frame(parent)
-        info_frame.pack(side=tk.LEFT, padx=10, pady=10, fill=tk.BOTH, expand=True)
+    def _create_hotbar_panel(self, parent) -> None:
+        """Create the bottom hotbar panel with controls."""
+        hotbar_panel = ttk.Frame(parent)
+        hotbar_panel.pack(side=tk.TOP, padx=10, pady=10, fill=tk.X)
 
-        # Hotbar frame
+        # Hotbar label
         hotbar_label = ttk.Label(
-            info_frame, text="Hotbar (Setup Mode)", font=("Arial", 11, "bold")
+            hotbar_panel, text="Hotbar (Setup Mode)", font=("Arial", 11, "bold")
         )
         hotbar_label.pack(anchor="w", pady=(0, 5))
 
-        self.hotbar_frame = ttk.Frame(info_frame)
-        self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 10))
+        # Hotbar buttons frame
+        self.hotbar_frame = ttk.Frame(hotbar_panel)
+        self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
 
         self._create_hotbar_buttons()
-
-        # Instructions
-        instructions_label = ttk.Label(
-            info_frame, text="Instructions", font=("Arial", 11, "bold")
-        )
-        instructions_label.pack(anchor="w", pady=(10, 5))
-
-        instructions_text = """
-SETUP MODE:
-- Click hotbar to select a tile type
-- Click grid to place selected tile
-- Right-click to set player start
-- Click "Start Game" when ready
-
-PLAY MODE:
-- Click grid cells to build path
-- Right-click to set player position
-- "Find Optimal Path" to see best move
-- "Execute Turn" to perform action
-        """
-
-        ttk.Label(info_frame, text=instructions_text, justify=tk.LEFT).pack(
-            anchor="w", pady=(0, 10)
-        )
 
     def _create_hotbar_buttons(self) -> None:
         """Create hotbar buttons for all cell types."""
@@ -421,6 +398,6 @@ PLAY MODE:
 
         # Show hotbar again
         if not self.hotbar_frame.winfo_viewable():
-            self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 10))
+            self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
 
         self._draw_grid()
