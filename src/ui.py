@@ -282,7 +282,10 @@ class GameGUI:
                     "Invalid Placement", "Cannot place items on the player tile."
                 )
                 return
-            if self.blocked_locked and self.game_state.grid[row][col] == CellType.BLOCKED:
+            if (
+                self.blocked_locked
+                and self.game_state.grid[row][col] == CellType.BLOCKED
+            ):
                 messagebox.showwarning(
                     "Locked Tile", "Blocked tiles are locked after initial placement."
                 )
@@ -304,7 +307,6 @@ class GameGUI:
 
         elif self.mode == "place_jelly":
             self._place_jelly_at(row, col)
-
 
     def _execute_turn(self) -> None:
         """Execute the current path as a turn."""
@@ -450,9 +452,7 @@ class GameGUI:
             self.optimal_path = []
             self.current_path = []
             self.optimal_label.config(
-                text=(
-                    f"Optimal: HARVEST\nPoints: {score}\nResources: {resources}"
-                )
+                text=(f"Optimal: HARVEST\nPoints: {score}\nResources: {resources}")
             )
             self._draw_grid()
             return
@@ -460,9 +460,7 @@ class GameGUI:
         self.optimal_path = path
         self.current_path = path.copy()
         self.optimal_label.config(
-            text=(
-                f"Optimal: PATH\nPoints: {score}\nResources: {resources}"
-            )
+            text=(f"Optimal: PATH\nPoints: {score}\nResources: {resources}")
         )
         self._draw_grid()
 
@@ -475,18 +473,14 @@ class GameGUI:
         self._set_hotbar_allowed_items(set())
         self.hotbar_frame.pack_forget()
         self.optimal_label.config(text="Optimal: --")
-        messagebox.showinfo(
-            "Game Over", f"Final score: {self.game_state.score}"
-        )
+        messagebox.showinfo("Game Over", f"Final score: {self.game_state.score}")
 
     def _update_score(self) -> None:
         """Update the score display label."""
         display_turn = min(self.game_state.turn, GameConfig.MAX_TURNS)
         self.score_label.config(text=f"Score: {self.game_state.score}")
         self.turn_label.config(text=f"Turn: {display_turn}")
-        self.harvest_label.config(
-            text=f"Harvest: {self.game_state.harvest_charges}"
-        )
+        self.harvest_label.config(text=f"Harvest: {self.game_state.harvest_charges}")
         self.normal_collected_label.config(
             text=(
                 f"Normal Collected: {self.game_state.total_normal_resources_collected}"
