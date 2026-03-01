@@ -8,6 +8,16 @@ from models import CellType, GameConfig, HOTBAR_ITEMS, CELL_COLORS, Hotbar
 from game import GameState
 from solver import PathSolver
 
+RAINBOW_STRIPE_COLORS = [
+    "#FF0000",
+    "#FF7F00",
+    "#FFFF00",
+    "#00FF00",
+    "#0000FF",
+    "#4B0082",
+    "#9400D3",
+]
+
 
 class GameGUI:
     """Main GUI window managing game display and user interaction."""
@@ -21,24 +31,67 @@ class GameGUI:
         self.hotbar = Hotbar()
 
         self.cell_size = GameConfig.CELL_SIZE
-        self.mode = "setup"  # setup, play, post_turn, place_jelly
+        self.mode = "placement"  # placement, play, place_jelly, game_over
         self.current_path: List[Tuple[int, int]] = []
         self.optimal_path: List[Tuple[int, int]] = []
+        self.optimal_action: Optional[str] = None
+        self.blocked_locked = False
+        self.game_over = False
 
         self._setup_ui()
         self._draw_grid()
+        self._enter_placement_mode(initial=True)
+        self._update_score()
 
     def _setup_ui(self) -> None:
         """Initialize all UI components."""
-        # Control panel (top)
-        self._create_control_panel()
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
 
-        # Main content frame - vertical layout (grid on top, hotbar below)
-        content_frame = ttk.Frame(self.root)
-        content_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        main_frame.columnconfigure(1, weight=1)
 
-        # Canvas (grid) on top
-        canvas_frame = ttk.Frame(content_frame)
+        # Left panel for stats and buttons
+        left_panel = ttk.Frame(main_frame)
+        left_panel.grid(row=0, column=0, sticky="ns")
+
+        self.score_label = ttk.Label(left_panel, text="Score: 0", font=("Arial", 12))
+        self.score_label.grid(row=0, column=0, sticky="w", pady=(0, 5))
+
+        self.turn_label = ttk.Label(left_panel, text="Turn: 1", font=("Arial", 12))
+        self.turn_label.grid(row=1, column=0, sticky="w", pady=(0, 5))
+
+        self.harvest_label = ttk.Label(
+            left_panel, text="Harvest: 0", font=("Arial", 12)
+        )
+        self.harvest_label.grid(row=2, column=0, sticky="w", pady=(0, 5))
+
+        self.normal_collected_label = ttk.Label(
+            left_panel, text="Normal Collected: 0", font=("Arial", 12)
+        )
+        self.normal_collected_label.grid(row=3, column=0, sticky="w", pady=(0, 10))
+
+        self.optimal_label = ttk.Label(
+            left_panel, text="Optimal: --", font=("Arial", 11), wraplength=180
+        )
+        self.optimal_label.grid(row=4, column=0, sticky="w", pady=(0, 10))
+
+        self.execute_turn_button = ttk.Button(
+            left_panel, text="Execute Turn", command=self._execute_turn
+        )
+        self.execute_turn_button.grid(row=5, column=0, sticky="ew", pady=(0, 5))
+
+        self.finish_placement_button = ttk.Button(
+            left_panel, text="Finish Placement", command=self._finish_placement
+        )
+        self.finish_placement_button.grid(row=6, column=0, sticky="ew", pady=(0, 5))
+
+        # Right panel for board and hotbar
+        right_panel = ttk.Frame(main_frame)
+        right_panel.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+
+        canvas_frame = ttk.Frame(right_panel)
         canvas_frame.pack(side=tk.TOP, padx=10, pady=10)
 
         self.canvas = tk.Canvas(
@@ -50,58 +103,9 @@ class GameGUI:
         self.canvas.pack()
 
         self.canvas.bind("<Button-1>", self._on_canvas_click)
-        self.canvas.bind("<Button-3>", self._on_canvas_right_click)
 
         # Hotbar frame on bottom
-        self._create_hotbar_panel(content_frame)
-
-    def _create_control_panel(self) -> None:
-        """Create the top control panel with mode indicator and buttons."""
-        control_frame = ttk.Frame(self.root, padding="10")
-        control_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
-
-        # Mode indicator
-        self.mode_label = ttk.Label(
-            control_frame, text="Mode: SETUP", font=("Arial", 12, "bold")
-        )
-        self.mode_label.pack(side=tk.LEFT, padx=5)
-
-        # Score display
-        self.score_label = ttk.Label(
-            control_frame,
-            text="Score: 0 | Turn: 1 | Harvest: 0 | Normal Collected: 0",
-            font=("Arial", 12),
-        )
-        self.score_label.pack(side=tk.LEFT, padx=20)
-
-        # Buttons
-        ttk.Button(control_frame, text="Start Game", command=self._start_game).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(
-            control_frame, text="Find Optimal Path", command=self._find_optimal
-        ).pack(side=tk.LEFT, padx=5)
-        ttk.Button(control_frame, text="Clear Path", command=self._clear_path).pack(
-            side=tk.LEFT, padx=5
-        )
-        self.execute_turn_button = ttk.Button(
-            control_frame, text="Execute Turn", command=self._execute_turn
-        )
-        self.execute_turn_button.pack(side=tk.LEFT, padx=5)
-        self.harvest_button = ttk.Button(
-            control_frame, text="Use Harvest", command=self._use_harvest
-        )
-        self.harvest_button.pack(side=tk.LEFT, padx=5)
-        self.finish_placement_button = ttk.Button(
-            control_frame,
-            text="Finish Placement",
-            command=self._finish_post_turn_placement,
-        )
-        self.finish_placement_button.pack(side=tk.LEFT, padx=5)
-        self.finish_placement_button.pack_forget()
-        ttk.Button(control_frame, text="Reset", command=self._reset_game).pack(
-            side=tk.LEFT, padx=5
-        )
+        self._create_hotbar_panel(right_panel)
 
     def _create_hotbar_panel(self, parent) -> None:
         """Create the bottom hotbar panel with controls."""
@@ -110,7 +114,7 @@ class GameGUI:
 
         # Hotbar label
         self.hotbar_label = ttk.Label(
-            hotbar_panel, text="Hotbar (Setup Mode)", font=("Arial", 11, "bold")
+            hotbar_panel, text="Hotbar", font=("Arial", 11, "bold")
         )
         self.hotbar_label.pack(anchor="w", pady=(0, 5))
 
@@ -151,9 +155,21 @@ class GameGUI:
             else:
                 btn.config(state=tk.DISABLED)
 
+        if allowed_items is not None:
+            selected = self.hotbar.get_selected()
+            if selected not in allowed_items:
+                next_item = None
+                for item in HOTBAR_ITEMS:
+                    if item in allowed_items:
+                        next_item = item
+                        break
+                if next_item is not None:
+                    self.hotbar.select(next_item)
+                    self._highlight_selected_hotbar()
+
     def _select_hotbar_item(self, item: CellType) -> None:
         """Handle hotbar item selection."""
-        if self.mode in {"setup", "post_turn"}:
+        if self.mode == "placement":
             self.hotbar.select(item)
             self._highlight_selected_hotbar()
         elif self.mode == "place_jelly" and item == CellType.JELLY:
@@ -190,18 +206,37 @@ class GameGUI:
                     outline_color = "black"
                     outline_width = 1
 
+                if cell_type == CellType.JELLY:
+                    stripe_height = (y2 - y1) / len(RAINBOW_STRIPE_COLORS)
+                    for idx, color in enumerate(RAINBOW_STRIPE_COLORS):
+                        sy1 = y1 + idx * stripe_height
+                        sy2 = y1 + (idx + 1) * stripe_height
+                        self.canvas.create_rectangle(
+                            x1, sy1, x2, sy2, fill=color, outline=""
+                        )
+                else:
+                    self.canvas.create_rectangle(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        fill=hex_color,
+                        outline="",
+                        width=0,
+                    )
+
                 self.canvas.create_rectangle(
                     x1,
                     y1,
                     x2,
                     y2,
-                    fill=hex_color,
+                    fill="",
                     outline=outline_color,
                     width=outline_width,
                 )
 
                 # Draw icon
-                if icon:
+                if icon and cell_type != CellType.JELLY:
                     cx = (x1 + x2) / 2
                     cy = (y1 + y2) / 2
                     self.canvas.create_text(
@@ -210,19 +245,14 @@ class GameGUI:
 
                 # Draw player marker
                 if (row, col) == self.game_state.player_pos:
-                    cx = (x1 + x2) / 2
-                    cy = (y1 + y2) / 2
-                    self.canvas.create_oval(
-                        cx - 15,
-                        cy - 15,
-                        cx + 15,
-                        cy + 15,
+                    self.canvas.create_rectangle(
+                        x1,
+                        y1,
+                        x2,
+                        y2,
                         fill="red",
                         outline="darkred",
                         width=2,
-                    )
-                    self.canvas.create_text(
-                        cx, cy, text="P", font=("Arial", 16, "bold"), fill="white"
                     )
 
         # Draw current path
@@ -246,9 +276,25 @@ class GameGUI:
         if not (0 <= row < GameConfig.GRID_SIZE and 0 <= col < GameConfig.GRID_SIZE):
             return
 
-        if self.mode in {"setup", "post_turn"}:
-            # Place selected hotbar item
+        if self.mode == "placement":
+            if (row, col) == self.game_state.player_pos:
+                messagebox.showwarning(
+                    "Invalid Placement", "Cannot place items on the player tile."
+                )
+                return
+            if self.blocked_locked and self.game_state.grid[row][col] == CellType.BLOCKED:
+                messagebox.showwarning(
+                    "Locked Tile", "Blocked tiles are locked after initial placement."
+                )
+                return
+
             selected = self.hotbar.get_selected()
+            if self.blocked_locked and selected == CellType.BLOCKED:
+                messagebox.showwarning(
+                    "Blocked Locked", "Blocked tiles can only be placed initially."
+                )
+                return
+
             if self.game_state.grid[row][col] == CellType.JELLY:
                 self.game_state.jellies.discard((row, col))
             self.game_state.grid[row][col] = selected
@@ -259,188 +305,120 @@ class GameGUI:
         elif self.mode == "place_jelly":
             self._place_jelly_at(row, col)
 
-        elif self.mode == "play":
-            # Build path
-            if not self.current_path:
-                if (row, col) == self.game_state.player_pos:
-                    self.current_path.append((row, col))
-            else:
-                last_pos = self.current_path[-1]
-                if (row, col) in self.game_state.get_neighbors(
-                    last_pos[0], last_pos[1]
-                ):
-                    # Check if it's a new position or extending the path
-                    if (row, col) not in self.current_path or (row, col) == last_pos:
-                        self.current_path.append((row, col))
-
-            self._draw_grid()
-
-    def _on_canvas_right_click(self, event) -> None:
-        """Handle right-click on canvas."""
-        col = event.x // self.cell_size
-        row = event.y // self.cell_size
-
-        if not (0 <= row < GameConfig.GRID_SIZE and 0 <= col < GameConfig.GRID_SIZE):
-            return
-
-        if self.mode == "setup":
-            self.game_state.player_pos = (row, col)
-            self._draw_grid()
-        elif self.mode == "play":
-            # Allow repositioning in play mode for testing
-            self.game_state.player_pos = (row, col)
-            self.current_path = [(row, col)]
-            self._draw_grid()
-
-    def _start_game(self) -> None:
-        """Start the game and switch to play mode."""
-        self.mode = "play"
-        self.mode_label.config(text="Mode: PLAY")
-        self.hotbar_frame.pack_forget()  # Hide hotbar in play mode
-        self.hotbar_label.config(text="Hotbar (Setup Mode)")
-        self._set_hotbar_allowed_items(None)
-        self.finish_placement_button.pack_forget()
-        self.harvest_button.config(state=tk.NORMAL)
-        messagebox.showinfo(
-            "Game Started", "Game started! Find paths and execute turns."
-        )
-
-    def _find_optimal(self) -> None:
-        """Find and display the optimal path."""
-        if self.mode != "play":
-            messagebox.showwarning("Not in Play Mode", "Start the game first!")
-            return
-
-        action, path, score, resources = self.solver.find_optimal_path()
-        if action == "harvest":
-            self.optimal_path = []
-            self.current_path = []
-            self._draw_grid()
-            messagebox.showinfo(
-                "Optimal Move",
-                f"Recommended action: HARVEST\n"
-                f"Expected points: {score}\n"
-                f"Expected resources collected: {resources}",
-            )
-            return
-
-        self.optimal_path = path
-        self.current_path = path.copy()
-        self._draw_grid()
-        messagebox.showinfo(
-            "Optimal Move",
-            f"Recommended action: PATH\n"
-            f"Expected points: {score} ({resources} resources, {len(path) - 1} moves)",
-        )
-
-    def _clear_path(self) -> None:
-        """Clear the current and optimal paths."""
-        self.current_path = []
-        self.optimal_path = []
-        self._draw_grid()
 
     def _execute_turn(self) -> None:
         """Execute the current path as a turn."""
-        if self.mode != "play":
-            messagebox.showwarning("Not in Play Mode", "Start the game first!")
+        if self.mode != "play" or self.game_over:
             return
 
-        if len(self.current_path) < 2:
-            messagebox.showwarning("No Path", "Create a path first!")
+        if self.optimal_action is None:
+            messagebox.showwarning("No Move", "No optimal move is available.")
             return
 
-        valid, msg = self.game_state.validate_path(self.current_path)
+        if self.optimal_action == "harvest":
+            self.game_state.refresh_harvest_charges()
+            if self.game_state.harvest_charges <= 0:
+                messagebox.showwarning("No Charges", "No harvest charges available.")
+                return
+            self.game_state.execute_harvest()
+            self.game_state.apply_gravity()
+            self._draw_grid()
+            self._update_score()
+            self._enter_placement_mode(initial=False)
+            return
+
+        if len(self.optimal_path) < 2:
+            messagebox.showwarning("No Path", "No optimal path is available.")
+            return
+
+        valid, msg = self.game_state.validate_path(self.optimal_path)
         if not valid:
             messagebox.showerror("Invalid Path", msg)
             return
 
+        self.current_path = self.optimal_path.copy()
         points, resources, jelly_pending = self.game_state.execute_turn(
             self.current_path
         )
 
-        # Show execution result
+        self.current_path = []
+        self.optimal_path = []
+        self._draw_grid()
+        self._update_score()
+
+        if self.game_state.turn > GameConfig.MAX_TURNS:
+            self._end_game()
+            return
+
         if jelly_pending:
             messagebox.showinfo(
                 "Turn Executed",
                 f"Points: {points}\nResources: {resources}\n"
                 "Place the rainbow jelly before gravity applies.",
             )
+            self._enter_jelly_placement()
         else:
             messagebox.showinfo(
                 "Turn Executed", f"Points: {points}\nResources: {resources}"
             )
-
-        self.current_path = []
-        self.optimal_path = []
-        self._draw_grid()
-        self._update_score()
-
-        if jelly_pending:
-            self._enter_jelly_placement()
-        else:
             self.game_state.apply_gravity()
             self._draw_grid()
-            # Enter post-turn placement mode using hotbar
-            self._enter_post_turn_placement()
+            self._enter_placement_mode(initial=False)
 
-    def _use_harvest(self) -> None:
-        """Use a harvest charge at the start of turn."""
-        if self.mode != "play":
-            messagebox.showwarning("Not in Play Mode", "Start the game first!")
+    def _enter_placement_mode(self, initial: bool) -> None:
+        """Switch to resource placement mode with hotbar."""
+        if self.game_over:
             return
+        self.mode = "placement"
+        if initial:
+            self.blocked_locked = False
+        else:
+            self.blocked_locked = True
 
-        self.game_state.refresh_harvest_charges()
-        if self.game_state.harvest_charges <= 0:
-            messagebox.showwarning("No Charges", "No harvest charges available.")
-            return
-
-        points, resources, resource_type = self.game_state.execute_harvest()
-        resource_name = resource_type.name if resource_type is not None else "NONE"
-
-        self.current_path = []
-        self.optimal_path = []
-        self.game_state.apply_gravity()
-        self._draw_grid()
-        self._update_score()
-
-        messagebox.showinfo(
-            "Harvest Used",
-            f"Harvested: {resource_name}\n"
-            f"Resources collected: {resources}\n"
-            f"Points earned: {points}",
-        )
-
-        self._enter_post_turn_placement()
-
-    def _enter_post_turn_placement(self) -> None:
-        """Switch to post-turn placement mode with hotbar."""
-        self.mode = "post_turn"
-        self.mode_label.config(text="Mode: POST-TURN")
-        self.hotbar_label.config(text="Hotbar (Post-Turn Placement)")
         if not self.hotbar_frame.winfo_viewable():
             self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
-        self._set_hotbar_allowed_items(None)
-        self.finish_placement_button.pack(side=tk.LEFT, padx=5)
+
+        allowed_items = set(HOTBAR_ITEMS)
+        if self.blocked_locked and CellType.BLOCKED in allowed_items:
+            allowed_items.remove(CellType.BLOCKED)
+        self._set_hotbar_allowed_items(allowed_items)
+
+        self.finish_placement_button.config(state=tk.NORMAL)
         self.execute_turn_button.config(state=tk.DISABLED)
-        self.harvest_button.config(state=tk.DISABLED)
-        messagebox.showinfo(
-            "Post-Turn Placement",
-            "Use the hotbar to edit the board. Click Finish Placement when done.",
-        )
+        self.optimal_action = None
+        self.optimal_path = []
+        self.current_path = []
+        self.optimal_label.config(text="Optimal: --")
+        self._draw_grid()
+
+    def _finish_placement(self) -> None:
+        """Validate the board and start the next turn."""
+        if self.mode != "placement" or self.game_over:
+            return
+        if not self.game_state.is_board_filled():
+            messagebox.showwarning(
+                "Incomplete Board",
+                "All tiles must be filled with resources or blocked tiles.",
+            )
+            return
+
+        self.blocked_locked = True
+        self.mode = "play"
+        self.finish_placement_button.config(state=tk.DISABLED)
+        self.execute_turn_button.config(state=tk.NORMAL)
+        self.hotbar_frame.pack_forget()
+        self._compute_optimal_move()
 
     def _enter_jelly_placement(self) -> None:
         """Switch to jelly placement mode before gravity."""
         self.mode = "place_jelly"
-        self.mode_label.config(text="Mode: PLACE JELLY")
-        self.hotbar_label.config(text="Hotbar (Jelly Placement)")
         if not self.hotbar_frame.winfo_viewable():
             self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
         self.hotbar.select(CellType.JELLY)
         self._highlight_selected_hotbar()
         self._set_hotbar_allowed_items({CellType.JELLY})
-        self.finish_placement_button.pack_forget()
+        self.finish_placement_button.config(state=tk.DISABLED)
         self.execute_turn_button.config(state=tk.DISABLED)
-        self.harvest_button.config(state=tk.DISABLED)
 
     def _place_jelly_at(self, row: int, col: int) -> None:
         """Place the pending jelly, apply gravity, then enter post-turn placement."""
@@ -459,50 +437,58 @@ class GameGUI:
         self.game_state.jellies.add((row, col))
         self.game_state.apply_gravity()
         self._draw_grid()
-        self._enter_post_turn_placement()
+        self._enter_placement_mode(initial=False)
 
-    def _finish_post_turn_placement(self) -> None:
-        """Exit post-turn placement mode and return to play."""
-        if self.mode != "post_turn":
+    def _compute_optimal_move(self) -> None:
+        """Compute and display the optimal move for the current board."""
+        if self.game_over:
             return
-        self.mode = "play"
-        self.mode_label.config(text="Mode: PLAY")
-        self.hotbar_label.config(text="Hotbar (Setup Mode)")
-        self.hotbar_frame.pack_forget()
-        self.finish_placement_button.pack_forget()
-        self.execute_turn_button.config(state=tk.NORMAL)
-        self.harvest_button.config(state=tk.NORMAL)
-        self._set_hotbar_allowed_items(None)
+
+        action, path, score, resources = self.solver.find_optimal_path()
+        self.optimal_action = action
+        if action == "harvest":
+            self.optimal_path = []
+            self.current_path = []
+            self.optimal_label.config(
+                text=(
+                    f"Optimal: HARVEST\nPoints: {score}\nResources: {resources}"
+                )
+            )
+            self._draw_grid()
+            return
+
+        self.optimal_path = path
+        self.current_path = path.copy()
+        self.optimal_label.config(
+            text=(
+                f"Optimal: PATH\nPoints: {score}\nResources: {resources}"
+            )
+        )
         self._draw_grid()
+
+    def _end_game(self) -> None:
+        """End the game after the final turn."""
+        self.game_over = True
+        self.mode = "game_over"
+        self.execute_turn_button.config(state=tk.DISABLED)
+        self.finish_placement_button.config(state=tk.DISABLED)
+        self._set_hotbar_allowed_items(set())
+        self.hotbar_frame.pack_forget()
+        self.optimal_label.config(text="Optimal: --")
+        messagebox.showinfo(
+            "Game Over", f"Final score: {self.game_state.score}"
+        )
 
     def _update_score(self) -> None:
         """Update the score display label."""
-        self.score_label.config(
+        display_turn = min(self.game_state.turn, GameConfig.MAX_TURNS)
+        self.score_label.config(text=f"Score: {self.game_state.score}")
+        self.turn_label.config(text=f"Turn: {display_turn}")
+        self.harvest_label.config(
+            text=f"Harvest: {self.game_state.harvest_charges}"
+        )
+        self.normal_collected_label.config(
             text=(
-                f"Score: {self.game_state.score} | Turn: {self.game_state.turn} | "
-                f"Harvest: {self.game_state.harvest_charges} | "
                 f"Normal Collected: {self.game_state.total_normal_resources_collected}"
             )
         )
-
-    def _reset_game(self) -> None:
-        """Reset the game to initial state."""
-        self.game_state = GameState()
-        self.solver = PathSolver(self.game_state)
-        self.hotbar = Hotbar()
-        self.mode = "setup"
-        self.mode_label.config(text="Mode: SETUP")
-        self.hotbar_label.config(text="Hotbar (Setup Mode)")
-        self.current_path = []
-        self.optimal_path = []
-        self._update_score()
-        self._set_hotbar_allowed_items(None)
-
-        # Show hotbar again
-        if not self.hotbar_frame.winfo_viewable():
-            self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
-        self.finish_placement_button.pack_forget()
-        self.execute_turn_button.config(state=tk.NORMAL)
-        self.harvest_button.config(state=tk.NORMAL)
-
-        self._draw_grid()

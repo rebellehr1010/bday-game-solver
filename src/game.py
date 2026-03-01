@@ -54,6 +54,16 @@ class GameState:
 
         return best_resource, best_count
 
+    def is_board_filled(self) -> bool:
+        """Check whether all non-player tiles are filled (blocked counts as filled)."""
+        for row in range(self.grid_size):
+            for col in range(self.grid_size):
+                if (row, col) == self.player_pos:
+                    continue
+                if self.grid[row][col] == CellType.EMPTY:
+                    return False
+        return True
+
     def is_valid_position(self, row: int, col: int) -> bool:
         """Check if position is within grid bounds."""
         return 0 <= row < self.grid_size and 0 <= col < self.grid_size
@@ -203,7 +213,6 @@ class GameState:
         if target_resource is None or count == 0:
             self.harvest_uses += 1
             self._recalculate_harvest_charges()
-            self.turn += 1
             return 0, 0, None
 
         for row in range(self.grid_size):
@@ -213,7 +222,6 @@ class GameState:
 
         points = count * 50
         self.score += points
-        self.turn += 1
         self.harvest_uses += 1
         self._recalculate_harvest_charges()
 

@@ -28,7 +28,7 @@ CELL_COLORS = {
     CellType.PURPLE: ("#9370DB", "/\\_"),  # Medium purple
     CellType.BRIGHT_PINK: ("#FF1493", "+"),  # Deep pink
     CellType.DARK_BLUE: ("#00008B", "<3"),  # Dark blue
-    CellType.JELLY: ("#FFB6C1", "o"),  # Light pink for rainbow jelly
+    CellType.JELLY: ("#FFFFFF", ""),  # Rainbow jelly drawn as stripes in UI
 }
 
 # Standard resources (excludes JELLY, EMPTY, BLOCKED)
@@ -44,7 +44,6 @@ RESOURCE_TYPES = [
 # Hotbar items in order (for UI display)
 HOTBAR_ITEMS = [
     CellType.BLOCKED,
-    CellType.EMPTY,
     CellType.LIGHT_BLUE,
     CellType.YELLOW,
     CellType.PINK,
@@ -64,6 +63,7 @@ class GameConfig:
     RESOURCES_FOR_JELLY = 10  # Resources needed per turn to spawn jelly
     HARVEST_RESOURCES_PER_CHARGE = 50
     MAX_HARVEST_CHARGES = 3
+    MAX_TURNS = 10
 
 
 class Hotbar:
