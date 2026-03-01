@@ -21,7 +21,7 @@ class GameGUI:
         self.hotbar = Hotbar()
 
         self.cell_size = GameConfig.CELL_SIZE
-        self.mode = "setup"  # setup, play, post_turn
+        self.mode = "setup"  # setup, play, post_turn, place_jelly
         self.current_path: List[Tuple[int, int]] = []
         self.optimal_path: List[Tuple[int, int]] = []
 
@@ -137,9 +137,20 @@ class GameGUI:
         # Highlight the initially selected item
         self._highlight_selected_hotbar()
 
+    def _set_hotbar_allowed_items(self, allowed_items: Optional[set]) -> None:
+        """Enable only the allowed hotbar items (or all if None)."""
+        for item, btn in self.hotbar_buttons.items():
+            if allowed_items is None or item in allowed_items:
+                btn.config(state=tk.NORMAL)
+            else:
+                btn.config(state=tk.DISABLED)
+
     def _select_hotbar_item(self, item: CellType) -> None:
         """Handle hotbar item selection."""
         if self.mode in {"setup", "post_turn"}:
+            self.hotbar.select(item)
+            self._highlight_selected_hotbar()
+        elif self.mode == "place_jelly" and item == CellType.JELLY:
             self.hotbar.select(item)
             self._highlight_selected_hotbar()
 
@@ -239,6 +250,9 @@ class GameGUI:
                 self.game_state.jellies.add((row, col))
             self._draw_grid()
 
+        elif self.mode == "place_jelly":
+            self._place_jelly_at(row, col)
+
         elif self.mode == "play":
             # Build path
             if not self.current_path:
@@ -278,6 +292,7 @@ class GameGUI:
         self.mode_label.config(text="Mode: PLAY")
         self.hotbar_frame.pack_forget()  # Hide hotbar in play mode
         self.hotbar_label.config(text="Hotbar (Setup Mode)")
+        self._set_hotbar_allowed_items(None)
         self.finish_placement_button.pack_forget()
         messagebox.showinfo(
             "Game Started", "Game started! Find paths and execute turns."
@@ -319,25 +334,34 @@ class GameGUI:
             messagebox.showerror("Invalid Path", msg)
             return
 
-        points, resources = self.game_state.execute_turn(self.current_path)
-        self.game_state.apply_gravity()
+        points, resources, jelly_pending = self.game_state.execute_turn(
+            self.current_path
+        )
 
         # Show execution result
-        jelly_msg = ""
-        if resources >= GameConfig.RESOURCES_FOR_JELLY:
-            jelly_msg = f"\n[Rainbow Jelly spawned! 10+ resources collected]"
-
-        messagebox.showinfo(
-            "Turn Executed", f"Points: {points}\nResources: {resources}{jelly_msg}"
-        )
+        if jelly_pending:
+            messagebox.showinfo(
+                "Turn Executed",
+                f"Points: {points}\nResources: {resources}\n"
+                "Place the rainbow jelly before gravity applies.",
+            )
+        else:
+            messagebox.showinfo(
+                "Turn Executed", f"Points: {points}\nResources: {resources}"
+            )
 
         self.current_path = []
         self.optimal_path = []
         self._draw_grid()
         self._update_score()
 
-        # Enter post-turn placement mode using hotbar
-        self._enter_post_turn_placement()
+        if jelly_pending:
+            self._enter_jelly_placement()
+        else:
+            self.game_state.apply_gravity()
+            self._draw_grid()
+            # Enter post-turn placement mode using hotbar
+            self._enter_post_turn_placement()
 
     def _enter_post_turn_placement(self) -> None:
         """Switch to post-turn placement mode with hotbar."""
@@ -346,12 +370,45 @@ class GameGUI:
         self.hotbar_label.config(text="Hotbar (Post-Turn Placement)")
         if not self.hotbar_frame.winfo_viewable():
             self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
+        self._set_hotbar_allowed_items(None)
         self.finish_placement_button.pack(side=tk.LEFT, padx=5)
         self.execute_turn_button.config(state=tk.DISABLED)
         messagebox.showinfo(
             "Post-Turn Placement",
             "Use the hotbar to edit the board. Click Finish Placement when done.",
         )
+
+    def _enter_jelly_placement(self) -> None:
+        """Switch to jelly placement mode before gravity."""
+        self.mode = "place_jelly"
+        self.mode_label.config(text="Mode: PLACE JELLY")
+        self.hotbar_label.config(text="Hotbar (Jelly Placement)")
+        if not self.hotbar_frame.winfo_viewable():
+            self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
+        self.hotbar.select(CellType.JELLY)
+        self._highlight_selected_hotbar()
+        self._set_hotbar_allowed_items({CellType.JELLY})
+        self.finish_placement_button.pack_forget()
+        self.execute_turn_button.config(state=tk.DISABLED)
+
+    def _place_jelly_at(self, row: int, col: int) -> None:
+        """Place the pending jelly, apply gravity, then enter post-turn placement."""
+        if (row, col) == self.game_state.player_pos:
+            messagebox.showwarning(
+                "Invalid Placement", "Cannot place jelly on the player tile."
+            )
+            return
+        if self.game_state.grid[row][col] != CellType.EMPTY:
+            messagebox.showwarning(
+                "Invalid Placement", "Jelly must be placed on an empty tile."
+            )
+            return
+
+        self.game_state.grid[row][col] = CellType.JELLY
+        self.game_state.jellies.add((row, col))
+        self.game_state.apply_gravity()
+        self._draw_grid()
+        self._enter_post_turn_placement()
 
     def _finish_post_turn_placement(self) -> None:
         """Exit post-turn placement mode and return to play."""
@@ -363,6 +420,7 @@ class GameGUI:
         self.hotbar_frame.pack_forget()
         self.finish_placement_button.pack_forget()
         self.execute_turn_button.config(state=tk.NORMAL)
+        self._set_hotbar_allowed_items(None)
         self._draw_grid()
 
     def _update_score(self) -> None:
@@ -382,6 +440,7 @@ class GameGUI:
         self.current_path = []
         self.optimal_path = []
         self._update_score()
+        self._set_hotbar_allowed_items(None)
 
         # Show hotbar again
         if not self.hotbar_frame.winfo_viewable():

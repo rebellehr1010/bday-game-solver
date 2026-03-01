@@ -1,7 +1,6 @@
 """Core game state and mechanics."""
 
 from typing import List, Tuple, Set, Optional
-import random
 
 from models import CellType, GameConfig, RESOURCE_TYPES
 
@@ -103,7 +102,7 @@ class GameState:
                 elif cell != locked_color:
                     return (
                         False,
-                        f"Cannot collect different colors in one turn (unless separated by jelly)",
+                        "Cannot collect different colors in one turn (unless separated by jelly)",
                     )
 
         # Check no revisiting start position
@@ -112,15 +111,16 @@ class GameState:
 
         return True, "Valid path"
 
-    def execute_turn(self, path: List[Tuple[int, int]]) -> Tuple[int, int]:
+    def execute_turn(self, path: List[Tuple[int, int]]) -> Tuple[int, int, bool]:
         """
-        Execute a turn, collecting resources and returning (points_earned, resources_collected).
+        Execute a turn, collecting resources and returning
+        (points_earned, resources_collected, jelly_pending).
 
         Only standard resources count toward points and collected count.
         Jellies do not contribute to these counts.
 
         Returns:
-            (points_earned, resources_collected_count)
+            (points_earned, resources_collected_count, jelly_pending)
         """
         collected_positions = []
         resources_count = 0
@@ -145,42 +145,34 @@ class GameState:
         self.score += points
         self.turn += 1
 
-        # Check if we collected 10+ resources; if so, spawn a jelly
-        if resources_count >= GameConfig.RESOURCES_FOR_JELLY:
-            self._spawn_jelly(collected_positions)
+        # Check if we collected 10+ resources; if so, a jelly must be placed
+        jelly_pending = resources_count >= GameConfig.RESOURCES_FOR_JELLY
 
-        return points, resources_count
-
-    def _spawn_jelly(self, cleared_positions: List[Tuple[int, int]]) -> None:
-        """
-        Spawn a rainbow jelly in a random cleared position.
-
-        Args:
-            cleared_positions: List of positions where resources were collected
-        """
-        if not cleared_positions:
-            return
-
-        # Choose a random cleared position
-        spawn_pos = random.choice(cleared_positions)
-        self.grid[spawn_pos[0]][spawn_pos[1]] = CellType.JELLY
-        self.jellies.add(spawn_pos)
+        return points, resources_count, jelly_pending
 
     def apply_gravity(self) -> None:
         """Apply gravity to make resources fall down in columns."""
         player_row, player_col = self.player_pos
         for col in range(self.grid_size):
+            jelly_rows = set()
             # Collect non-blocked, non-empty cells from bottom to top
             stable_cells = []
             for row in range(self.grid_size - 1, -1, -1):
                 cell = self.grid[row][col]
+                if cell == CellType.JELLY:
+                    jelly_rows.add(row)
+                    continue
                 if cell != CellType.BLOCKED and cell != CellType.EMPTY:
                     stable_cells.append(cell)
 
-            # Clear the column (except blocked cells)
+            # Clear the column (except blocked cells and jellies)
             for row in range(self.grid_size):
-                if self.grid[row][col] != CellType.BLOCKED:
-                    self.grid[row][col] = CellType.EMPTY
+                if self.grid[row][col] == CellType.BLOCKED:
+                    continue
+                if row in jelly_rows:
+                    self.grid[row][col] = CellType.JELLY
+                    continue
+                self.grid[row][col] = CellType.EMPTY
 
             # Place stable cells from bottom up
             row = self.grid_size - 1
@@ -188,6 +180,9 @@ class GameState:
                 # Find next available spot from bottom (skip player tile)
                 while row >= 0:
                     if self.grid[row][col] == CellType.BLOCKED:
+                        row -= 1
+                        continue
+                    if row in jelly_rows:
                         row -= 1
                         continue
                     if col == player_col and row == player_row:
