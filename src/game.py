@@ -2,7 +2,7 @@
 
 from typing import List, Tuple, Set, Optional
 
-from models import CellType, GameConfig, RESOURCE_TYPES
+from src.models import CellType, GameConfig, RESOURCE_TYPES
 
 
 class GameState:

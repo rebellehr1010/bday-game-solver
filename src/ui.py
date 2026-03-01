@@ -2,11 +2,13 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
+import os
+from PIL import Image, ImageTk, ImageOps
 
-from models import CellType, GameConfig, HOTBAR_ITEMS, CELL_COLORS, Hotbar
-from game import GameState
-from solver import PathSolver
+from src.models import CellType, GameConfig, HOTBAR_ITEMS, CELL_COLORS, Hotbar
+from src.game import GameState
+from src.solver import PathSolver
 
 RAINBOW_STRIPE_COLORS = [
     "#FF0000",
@@ -38,10 +40,67 @@ class GameGUI:
         self.blocked_locked = False
         self.game_over = False
 
+        # Load images
+        self._load_images()
+
         self._setup_ui()
         self._draw_grid()
         self._enter_placement_mode(initial=True)
         self._update_score()
+
+    def _load_images(self) -> None:
+        """Load all tile images and create greyscale versions."""
+        assets_dir = os.path.join(os.path.dirname(__file__), "assets")
+
+        # Mapping from CellType to filename
+        image_map = {
+            CellType.BLOCKED: "blocked.jpg",
+            CellType.LIGHT_BLUE: "light_blue.jpg",
+            CellType.YELLOW: "yellow.jpg",
+            CellType.PINK: "pink.jpg",
+            CellType.PURPLE: "purple.jpg",
+            CellType.BRIGHT_PINK: "light_pink.jpg",
+            CellType.DARK_BLUE: "dark_blue.jpg",
+            CellType.JELLY: "rainbow.jpg",
+        }
+
+        self.tile_images: Dict[CellType, ImageTk.PhotoImage] = {}
+        self.tile_images_grey: Dict[CellType, ImageTk.PhotoImage] = {}
+        self.tile_images_canvas: Dict[CellType, ImageTk.PhotoImage] = {}
+
+        size = (self.cell_size, self.cell_size)
+
+        for cell_type, filename in image_map.items():
+            path = os.path.join(assets_dir, filename)
+            img = Image.open(path)
+
+            # Resize for hotbar buttons and canvas (60x60)
+            img_resized = img.resize(size, Image.Resampling.LANCZOS)
+            self.tile_images[cell_type] = ImageTk.PhotoImage(img_resized)
+            self.tile_images_canvas[cell_type] = ImageTk.PhotoImage(img_resized)
+
+            # Create greyscale version for disabled buttons
+            img_grey = ImageOps.grayscale(img_resized)
+            img_grey_rgb = Image.new("RGB", img_grey.size)
+            img_grey_rgb.paste(img_grey)
+            self.tile_images_grey[cell_type] = ImageTk.PhotoImage(img_grey_rgb)
+
+        # Load player image (slightly smaller to fit within gridlines)
+        player_path = os.path.join(assets_dir, "player.jpg")
+        player_size = (
+            self.cell_size - 4,
+            self.cell_size - 4,
+        )  # 4px smaller for gridline padding
+        try:
+            player_img = Image.open(player_path).resize(
+                player_size, Image.Resampling.LANCZOS
+            )
+            self.player_image = ImageTk.PhotoImage(player_img)
+        except Exception as e:
+            print(f"Warning: Could not load player.jpg: {e}")
+            # Create a simple red square as fallback
+            player_img = Image.new("RGB", player_size, "red")
+            self.player_image = ImageTk.PhotoImage(player_img)
 
     def _setup_ui(self) -> None:
         """Initialize all UI components."""
@@ -72,20 +131,20 @@ class GameGUI:
         )
         self.normal_collected_label.grid(row=3, column=0, sticky="w", pady=(0, 10))
 
-        self.optimal_label = ttk.Label(
-            left_panel, text="Optimal: --", font=("Arial", 11), wraplength=180
-        )
-        self.optimal_label.grid(row=4, column=0, sticky="w", pady=(0, 10))
-
         self.execute_turn_button = ttk.Button(
             left_panel, text="Execute Turn", command=self._execute_turn
         )
-        self.execute_turn_button.grid(row=5, column=0, sticky="ew", pady=(0, 5))
+        self.execute_turn_button.grid(row=4, column=0, sticky="ew", pady=(0, 5))
 
         self.finish_placement_button = ttk.Button(
             left_panel, text="Finish Placement", command=self._finish_placement
         )
-        self.finish_placement_button.grid(row=6, column=0, sticky="ew", pady=(0, 5))
+        self.finish_placement_button.grid(row=5, column=0, sticky="ew", pady=(0, 5))
+
+        self.optimal_label = ttk.Label(
+            left_panel, text="Optimal: --", font=("Arial", 11), wraplength=180
+        )
+        self.optimal_label.grid(row=7, column=0, sticky="w", pady=(10, 0))
 
         # Right panel for board and hotbar
         right_panel = ttk.Frame(main_frame)
@@ -108,7 +167,7 @@ class GameGUI:
         self._create_hotbar_panel(right_panel)
 
     def _create_hotbar_panel(self, parent) -> None:
-        """Create the bottom hotbar panel with controls."""
+        """Create the bottom hotbar panel with controls (always visible)."""
         hotbar_panel = ttk.Frame(parent)
         hotbar_panel.pack(side=tk.TOP, padx=10, pady=10, fill=tk.X)
 
@@ -118,27 +177,75 @@ class GameGUI:
         )
         self.hotbar_label.pack(anchor="w", pady=(0, 5))
 
-        # Hotbar buttons frame
+        # Hotbar buttons frame - 2 rows
         self.hotbar_frame = ttk.Frame(hotbar_panel)
         self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
 
         self._create_hotbar_buttons()
 
     def _create_hotbar_buttons(self) -> None:
-        """Create hotbar buttons for all cell types."""
+        """Create hotbar buttons: blocked/jelly on left, gap, then 2x3 grid of resources."""
         self.hotbar_buttons = {}
 
-        for item in HOTBAR_ITEMS:
-            hex_color, icon = CELL_COLORS[item]
-            button_text = f"{item.name}\n{icon}" if icon else item.name
+        # Left column: BLOCKED and JELLY stacked vertically
+        left_frame = ttk.Frame(self.hotbar_frame)
+        left_frame.pack(side=tk.LEFT, padx=(0, 2))
 
+        btn_blocked = tk.Button(
+            left_frame,
+            image=self.tile_images[CellType.BLOCKED],
+            relief=tk.RAISED,
+            borderwidth=2,
+            command=lambda: self._select_hotbar_item(CellType.BLOCKED),
+        )
+        btn_blocked.pack(side=tk.TOP, padx=2, pady=2)
+        self.hotbar_buttons[CellType.BLOCKED] = btn_blocked
+
+        btn_jelly = tk.Button(
+            left_frame,
+            image=self.tile_images[CellType.JELLY],
+            relief=tk.RAISED,
+            borderwidth=2,
+            command=lambda: self._select_hotbar_item(CellType.JELLY),
+        )
+        btn_jelly.pack(side=tk.TOP, padx=2, pady=2)
+        self.hotbar_buttons[CellType.JELLY] = btn_jelly
+
+        # Spacer column (empty gap)
+        spacer_frame = ttk.Frame(self.hotbar_frame, width=20)
+        spacer_frame.pack(side=tk.LEFT)
+
+        # Right side: 2x3 grid of resources
+        right_frame = ttk.Frame(self.hotbar_frame)
+        right_frame.pack(side=tk.LEFT)
+
+        # Top row: YELLOW, PINK, PURPLE
+        row1_frame = ttk.Frame(right_frame)
+        row1_frame.pack(side=tk.TOP)
+
+        row1_items = [CellType.YELLOW, CellType.PINK, CellType.PURPLE]
+        for item in row1_items:
             btn = tk.Button(
-                self.hotbar_frame,
-                text=button_text,
-                width=12,
-                height=2,
-                bg=hex_color,
+                row1_frame,
+                image=self.tile_images[item],
                 relief=tk.RAISED,
+                borderwidth=2,
+                command=lambda cell=item: self._select_hotbar_item(cell),
+            )
+            btn.pack(side=tk.LEFT, padx=2, pady=2)
+            self.hotbar_buttons[item] = btn
+
+        # Bottom row: LIGHT_BLUE, BRIGHT_PINK, DARK_BLUE
+        row2_frame = ttk.Frame(right_frame)
+        row2_frame.pack(side=tk.TOP)
+
+        row2_items = [CellType.LIGHT_BLUE, CellType.BRIGHT_PINK, CellType.DARK_BLUE]
+        for item in row2_items:
+            btn = tk.Button(
+                row2_frame,
+                image=self.tile_images[item],
+                relief=tk.RAISED,
+                borderwidth=2,
                 command=lambda cell=item: self._select_hotbar_item(cell),
             )
             btn.pack(side=tk.LEFT, padx=2, pady=2)
@@ -148,12 +255,12 @@ class GameGUI:
         self._highlight_selected_hotbar()
 
     def _set_hotbar_allowed_items(self, allowed_items: Optional[set]) -> None:
-        """Enable only the allowed hotbar items (or all if None)."""
+        """Enable only the allowed hotbar items (or all if None), using greyscale for disabled."""
         for item, btn in self.hotbar_buttons.items():
             if allowed_items is None or item in allowed_items:
-                btn.config(state=tk.NORMAL)
+                btn.config(state=tk.NORMAL, image=self.tile_images[item])
             else:
-                btn.config(state=tk.DISABLED)
+                btn.config(state=tk.DISABLED, image=self.tile_images_grey[item])
 
         if allowed_items is not None:
             selected = self.hotbar.get_selected()
@@ -180,12 +287,12 @@ class GameGUI:
         """Highlight the currently selected hotbar item."""
         for item, btn in self.hotbar_buttons.items():
             if item == self.hotbar.get_selected():
-                btn.config(relief=tk.SUNKEN, width=12)
+                btn.config(relief=tk.SUNKEN, borderwidth=4)
             else:
-                btn.config(relief=tk.RAISED, width=12)
+                btn.config(relief=tk.RAISED, borderwidth=2)
 
     def _draw_grid(self) -> None:
-        """Redraw the grid display."""
+        """Redraw the grid display using images."""
         self.canvas.delete("all")
 
         # Draw cells
@@ -197,7 +304,17 @@ class GameGUI:
                 y2 = y1 + self.cell_size
 
                 cell_type = self.game_state.grid[row][col]
-                hex_color, icon = CELL_COLORS[cell_type]
+
+                # Draw tile image (if not empty)
+                if cell_type != CellType.EMPTY:
+                    self.canvas.create_image(
+                        x1, y1, image=self.tile_images_canvas[cell_type], anchor=tk.NW
+                    )
+                else:
+                    # Draw empty cell as white rectangle
+                    self.canvas.create_rectangle(
+                        x1, y1, x2, y2, fill="white", outline=""
+                    )
 
                 # Highlight if in optimal path
                 outline_color = "lime"
@@ -205,25 +322,6 @@ class GameGUI:
                 if (row, col) not in self.optimal_path:
                     outline_color = "black"
                     outline_width = 1
-
-                if cell_type == CellType.JELLY:
-                    stripe_height = (y2 - y1) / len(RAINBOW_STRIPE_COLORS)
-                    for idx, color in enumerate(RAINBOW_STRIPE_COLORS):
-                        sy1 = y1 + idx * stripe_height
-                        sy2 = y1 + (idx + 1) * stripe_height
-                        self.canvas.create_rectangle(
-                            x1, sy1, x2, sy2, fill=color, outline=""
-                        )
-                else:
-                    self.canvas.create_rectangle(
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        fill=hex_color,
-                        outline="",
-                        width=0,
-                    )
 
                 self.canvas.create_rectangle(
                     x1,
@@ -235,24 +333,11 @@ class GameGUI:
                     width=outline_width,
                 )
 
-                # Draw icon
-                if icon and cell_type != CellType.JELLY:
-                    cx = (x1 + x2) / 2
-                    cy = (y1 + y2) / 2
-                    self.canvas.create_text(
-                        cx, cy - 10, text=icon, font=("Arial", 12), fill="black"
-                    )
-
                 # Draw player marker
                 if (row, col) == self.game_state.player_pos:
-                    self.canvas.create_rectangle(
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        fill="red",
-                        outline="darkred",
-                        width=2,
+                    # Inset by 2 pixels to fit within gridlines
+                    self.canvas.create_image(
+                        x1 + 2, y1 + 2, image=self.player_image, anchor=tk.NW
                     )
 
         # Draw current path
@@ -377,9 +462,7 @@ class GameGUI:
         else:
             self.blocked_locked = True
 
-        if not self.hotbar_frame.winfo_viewable():
-            self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
-
+        # Hotbar is always visible, just update allowed items
         allowed_items = set(HOTBAR_ITEMS)
         if self.blocked_locked and CellType.BLOCKED in allowed_items:
             allowed_items.remove(CellType.BLOCKED)
@@ -408,14 +491,14 @@ class GameGUI:
         self.mode = "play"
         self.finish_placement_button.config(state=tk.DISABLED)
         self.execute_turn_button.config(state=tk.NORMAL)
-        self.hotbar_frame.pack_forget()
+        # Hotbar stays visible but disabled
+        self._set_hotbar_allowed_items(set())
         self._compute_optimal_move()
 
     def _enter_jelly_placement(self) -> None:
         """Switch to jelly placement mode before gravity."""
         self.mode = "place_jelly"
-        if not self.hotbar_frame.winfo_viewable():
-            self.hotbar_frame.pack(anchor="w", fill=tk.X, pady=(0, 5))
+        # Hotbar is always visible
         self.hotbar.select(CellType.JELLY)
         self._highlight_selected_hotbar()
         self._set_hotbar_allowed_items({CellType.JELLY})
@@ -470,8 +553,8 @@ class GameGUI:
         self.mode = "game_over"
         self.execute_turn_button.config(state=tk.DISABLED)
         self.finish_placement_button.config(state=tk.DISABLED)
+        # Hotbar stays visible but all disabled
         self._set_hotbar_allowed_items(set())
-        self.hotbar_frame.pack_forget()
         self.optimal_label.config(text="Optimal: --")
         messagebox.showinfo("Game Over", f"Final score: {self.game_state.score}")
 

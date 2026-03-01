@@ -1,8 +1,8 @@
 """Pathfinding solver for finding optimal game moves."""
 
 from typing import List, Tuple, Set, Optional
-from models import CellType, RESOURCE_TYPES
-from game import GameState
+from src.models import CellType, RESOURCE_TYPES
+from src.game import GameState
 
 
 class PathSolver:

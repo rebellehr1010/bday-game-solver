@@ -1,7 +1,13 @@
 """Birthday Game Solver - Main entry point."""
 
+import sys
+import os
+
+# Add parent directory to path so we can import src package
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import tkinter as tk
-from ui import GameGUI
+from src.ui import GameGUI
 
 
 def main():
