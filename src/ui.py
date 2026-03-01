@@ -424,9 +424,7 @@ class GameGUI:
             return
 
         self.current_path = self.optimal_path.copy()
-        points, resources, jelly_pending = self.game_state.execute_turn(
-            self.current_path
-        )
+        _, _, jelly_pending = self.game_state.execute_turn(self.current_path)
 
         self.current_path = []
         self.optimal_path = []
@@ -438,16 +436,8 @@ class GameGUI:
             return
 
         if jelly_pending:
-            messagebox.showinfo(
-                "Turn Executed",
-                f"Points: {points}\nResources: {resources}\n"
-                "Place the rainbow jelly before gravity applies.",
-            )
             self._enter_jelly_placement()
         else:
-            messagebox.showinfo(
-                "Turn Executed", f"Points: {points}\nResources: {resources}"
-            )
             self.game_state.apply_gravity()
             self._draw_grid()
             self._enter_placement_mode(initial=False)
