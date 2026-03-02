@@ -12,6 +12,7 @@ class PathSolver:
     HARVEST_CAP_BONUS = 40
     HARVEST_EARLY_USE_PENALTY = 40
     MAX_JELLY_PLACEMENT_SAMPLES = 10
+    MAX_DFS_NODES_PER_COLOR = 120000
 
     def __init__(self, game_state: GameState):
         self.game_state = game_state
@@ -187,6 +188,7 @@ class PathSolver:
         best_path = [start]
         best_score = 0
         best_resources = 0
+        nodes_explored = 0
 
         def dfs(
             current_pos: Tuple[int, int],
@@ -197,7 +199,11 @@ class PathSolver:
             chests: int,
             locked_color: Optional[CellType],
         ):
-            nonlocal best_path, best_score, best_resources
+            nonlocal best_path, best_score, best_resources, nodes_explored
+
+            if nodes_explored >= self.MAX_DFS_NODES_PER_COLOR:
+                return
+            nodes_explored += 1
 
             if score > best_score or (
                 score == best_score and resources > best_resources

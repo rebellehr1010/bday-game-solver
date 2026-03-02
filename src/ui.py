@@ -545,7 +545,27 @@ class GameGUI:
         if self.game_state.pending_chests > 0:
             self._enter_bonus_placement(False, self.game_state.pending_chests)
         else:
-            self._compute_optimal_move()
+            try:
+                self._compute_optimal_move()
+            except Exception as exc:
+                self.mode = "placement"
+                self.finish_placement_button.config(state=tk.NORMAL)
+                self.execute_turn_button.config(state=tk.DISABLED)
+                allowed_items = set(HOTBAR_ITEMS)
+                if CellType.BLOCKED in allowed_items:
+                    allowed_items.remove(CellType.BLOCKED)
+                if CellType.JELLY in allowed_items:
+                    allowed_items.remove(CellType.JELLY)
+                if (
+                    self.game_state.pending_chests <= 0
+                    and CellType.CHEST in allowed_items
+                ):
+                    allowed_items.remove(CellType.CHEST)
+                self._set_hotbar_allowed_items(allowed_items)
+                messagebox.showerror(
+                    "Solver Error",
+                    f"Could not compute the next move: {exc}",
+                )
 
     def _enter_bonus_placement(self, jelly_pending: bool, chest_pending: int) -> None:
         """Switch to bonus placement mode (jelly and/or chest) before gravity."""
