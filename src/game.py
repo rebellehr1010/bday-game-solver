@@ -40,12 +40,7 @@ class GameState:
 
     def get_most_abundant_resource(self) -> Tuple[Optional[CellType], int]:
         """Return (resource_type, count) for the most abundant standard resource."""
-        counts = {resource: 0 for resource in RESOURCE_TYPES}
-        for row in range(self.grid_size):
-            for col in range(self.grid_size):
-                cell = self.grid[row][col]
-                if cell in counts:
-                    counts[cell] += 1
+        counts = self.get_resource_counts()
 
         best_resource = None
         best_count = 0
@@ -59,12 +54,7 @@ class GameState:
 
     def get_most_abundant_resources_with_ties(self) -> Tuple[List[CellType], int]:
         """Return list of all resource types tied for most abundant, and their count."""
-        counts = {resource: 0 for resource in RESOURCE_TYPES}
-        for row in range(self.grid_size):
-            for col in range(self.grid_size):
-                cell = self.grid[row][col]
-                if cell in counts:
-                    counts[cell] += 1
+        counts = self.get_resource_counts()
 
         best_count = max(counts.values()) if counts else 0
         tied_resources = [
@@ -74,6 +64,66 @@ class GameState:
         ]
 
         return tied_resources, best_count
+
+    def get_resource_counts(self) -> dict:
+        """Return count per standard resource type currently on the board."""
+        counts = {resource: 0 for resource in RESOURCE_TYPES}
+        for row in range(self.grid_size):
+            for col in range(self.grid_size):
+                cell = self.grid[row][col]
+                if cell in counts:
+                    counts[cell] += 1
+        return counts
+
+    def get_present_resource_types(self) -> List[CellType]:
+        """Return resource types that have at least one tile on the board."""
+        counts = self.get_resource_counts()
+        return [resource for resource in RESOURCE_TYPES if counts[resource] > 0]
+
+    def get_adjacent_resource_types(self) -> List[CellType]:
+        """Return unique resource types currently adjacent to the player."""
+        adjacent_types = set()
+        row, col = self.player_pos
+        for nr, nc in self.get_neighbors(row, col):
+            cell = self.grid[nr][nc]
+            if cell in RESOURCE_TYPES:
+                adjacent_types.add(cell)
+        return [resource for resource in RESOURCE_TYPES if resource in adjacent_types]
+
+    def format_board_state(self) -> str:
+        """Return an ASCII board snapshot including player and key counters."""
+        symbols = {
+            CellType.EMPTY: ".",
+            CellType.BLOCKED: "#",
+            CellType.LIGHT_BLUE: "L",
+            CellType.YELLOW: "Y",
+            CellType.PINK: "P",
+            CellType.PURPLE: "U",
+            CellType.BRIGHT_PINK: "B",
+            CellType.DARK_BLUE: "D",
+            CellType.JELLY: "J",
+            CellType.CHEST: "C",
+        }
+
+        lines = []
+        for row in range(self.grid_size):
+            row_symbols = []
+            for col in range(self.grid_size):
+                if (row, col) == self.player_pos:
+                    row_symbols.append("@")
+                else:
+                    row_symbols.append(symbols[self.grid[row][col]])
+            lines.append(" ".join(row_symbols))
+
+        counts = self.get_resource_counts()
+        count_parts = [
+            f"{resource.name}:{counts[resource]}"
+            for resource in RESOURCE_TYPES
+            if counts[resource] > 0
+        ]
+        counts_line = "resources=" + (", ".join(count_parts) if count_parts else "none")
+
+        return "\n".join(lines + [counts_line])
 
     def is_board_filled(self) -> bool:
         """Check whether all non-player tiles are filled (blocked counts as filled)."""
@@ -196,7 +246,9 @@ class GameState:
 
         return True, "Valid path"
 
-    def execute_turn(self, path: List[Tuple[int, int]]) -> Tuple[int, int, bool, int]:
+    def execute_turn(
+        self, path: List[Tuple[int, int]], debug: bool = True
+    ) -> Tuple[int, int, bool, int]:
         """
         Execute a turn, collecting resources and returning
         (points_earned, resources_collected, jelly_pending, chest_pending).
@@ -246,54 +298,7 @@ class GameState:
 
         self._update_chest_progress(resources_count + chests_collected)
 
-        # Check if we collected 10+ resources; if so, a jelly must be placed
-        # Track resources sequentially through path to handle chests collected mid-turn
-        # The key insight: resources collected AFTER a chest should still count
         jelly_pending = False
-        running_resources = 0
-        running_chests = 0
-
-        # Reconstruct what was collected in order by traversing the path
-        for pos in path:
-            if pos == self.player_pos:
-                continue
-
-            # Check if this position was in collected_positions to determine what was here
-            if pos not in collected_positions:
-                continue
-
-            # Determine what type of cell this was
-            cell_type = None
-            for row in range(self.grid_size):
-                for col in range(self.grid_size):
-                    if (row, col) == pos:
-                        # It was collected, so grid is now empty. Need to infer type.
-                        # Check against our totals
-                        if pos in [p for p in collected_positions]:
-                            # This is a collected position
-                            # Check if it's in jellies/chests that were discarded
-                            pass
-
-            # Simpler approach: check at each step if we have enough for jelly
-            # Count resources and chests up to this point in the path
-            temp_res = 0
-            temp_chests = 0
-            for check_pos in path:
-                if check_pos == pos:
-                    break
-                if check_pos == self.player_pos:
-                    continue
-                # Can't reliably determine types after collection
-                # Instead, use the final calculation but check various scenarios
-
-        # Use the total resources and chests, checking if jelly threshold met
-        # The bug: need to check if at ANY point resources - (chests * 5) >= 10
-        # Simplified: if total resources >= 10 + (chests * 5), then jelly eligible
-        if resources_count >= GameConfig.RESOURCES_FOR_JELLY + (
-            chests_collected * GameConfig.CHEST_COST_RESOURCES
-        ):
-            jelly_pending = True
-
         effective_resources = resources_count - (
             chests_collected * GameConfig.CHEST_COST_RESOURCES
         )
@@ -302,12 +307,13 @@ class GameState:
         if effective_resources >= GameConfig.RESOURCES_FOR_JELLY:
             jelly_pending = True
 
-        # Debug logging
-        print(
-            f"[DEBUG] Turn {self.turn}: resources={resources_count}, chests={chests_collected}, "
-            f"effective={effective_resources}, jelly_pending={jelly_pending}, "
-            f"threshold_check={'PASS' if resources_count >= GameConfig.RESOURCES_FOR_JELLY + (chests_collected * GameConfig.CHEST_COST_RESOURCES) else 'FAIL'}"
-        )
+        if debug:
+            print(
+                f"[DEBUG] Turn {self.turn}: resources={resources_count}, chests={chests_collected}, "
+                f"effective={effective_resources}, jelly_pending={jelly_pending}, "
+                f"threshold_check={'PASS' if effective_resources >= GameConfig.RESOURCES_FOR_JELLY else 'FAIL'}"
+            )
+            print(f"[DEBUG] Board after execute_turn:\n{self.format_board_state()}")
 
         return points, resources_count, jelly_pending, self.pending_chests
 

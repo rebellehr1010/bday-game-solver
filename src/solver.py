@@ -14,9 +14,11 @@ class PathSolver:
     HARVEST_CAP_BONUS = 40
     HARVEST_EARLY_USE_PENALTY = 40
     MAX_JELLY_PLACEMENT_SAMPLES = 10
+    DEBUG_SOLVER_STATE = True
 
-    def __init__(self, game_state: GameState):
+    def __init__(self, game_state: GameState, verbose: bool = True):
         self.game_state = game_state
+        self.verbose = verbose
         self._neighbors_by_index = self._build_neighbor_index_table()
         self._immediate_score_cache: Dict[Tuple, int] = {}
         self._solver_start_time: Optional[float] = None
@@ -70,32 +72,57 @@ class PathSolver:
         start_pos = self.game_state.player_pos
         candidates: List[Tuple[str, List[Tuple[int, int]], int, int, float]] = []
 
-        print(
-            f"\n[{datetime.now().strftime('%H:%M:%S')}] [Solver] Starting path search..."
+        if self.verbose:
+            print(
+                f"\n[{datetime.now().strftime('%H:%M:%S')}] [Solver] Starting path search..."
+            )
+
+        present_colors = self.game_state.get_present_resource_types()
+        adjacent_colors = self.game_state.get_adjacent_resource_types()
+        path_colors = self._get_path_candidate_colors(
+            self.game_state, fallback_to_present=True
         )
 
-        # Path candidates (one per locked color), evaluated with one-turn lookahead.
-        for color in RESOURCE_TYPES:
+        self._log_state_debug(
+            "Turn start",
+            self.game_state,
+            present_colors,
+            adjacent_colors,
+            path_colors,
+        )
+
+        # Path candidates (one per viable color), evaluated with one-turn lookahead.
+        for color in path_colors:
             path, score, resources = self._find_best_path_for_color(start_pos, color)
             next_turn_score = self._estimate_next_turn_after_path(path)
             utility = score + (self.LOOKAHEAD_WEIGHT * next_turn_score)
             candidates.append(("path", path, score, resources, utility))
             elapsed = time.time() - self._solver_start_time
-            print(
-                f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] Checked {color.name}: score={score}, utility={utility:.2f}"
-                f" | Elapsed: {elapsed:.2f}s | Nodes: {self._nodes_checked}"
-            )
+            if self.verbose:
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] Checked {color.name}: score={score}, utility={utility:.2f}"
+                    f" | Elapsed: {elapsed:.2f}s | Nodes: {self._nodes_checked}"
+                )
 
         # Harvest candidate, also evaluated with one-turn lookahead.
         self.game_state.refresh_harvest_charges()
         harvest_score = 0
         harvest_resources = 0
+        dominant_colors: List[CellType] = []
         if self.game_state.harvest_charges > 0:
-            _, harvest_resources = self.game_state.get_most_abundant_resource()
+            dominant_colors, harvest_resources = (
+                self.game_state.get_most_abundant_resources_with_ties()
+            )
             harvest_score = harvest_resources * 50
         if self.game_state.harvest_charges > 0 and harvest_resources > 0:
             next_turn_score = self._estimate_next_turn_after_harvest()
             harvest_utility = harvest_score + (self.LOOKAHEAD_WEIGHT * next_turn_score)
+
+            if self.verbose:
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] Harvest candidates: "
+                    f"count={harvest_resources} tied={[c.name for c in dominant_colors]}"
+                )
 
             if self.game_state.harvest_charges >= GameConfig.MAX_HARVEST_CHARGES:
                 harvest_utility += self.HARVEST_CAP_BONUS
@@ -114,19 +141,62 @@ class PathSolver:
 
         if not candidates:
             elapsed = time.time() - self._solver_start_time
-            print(
-                f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] No candidates found. Time: {elapsed:.2f}s"
-            )
+            if self.verbose:
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] No candidates found. Time: {elapsed:.2f}s"
+                )
             return "path", [start_pos], 0, 0
 
         # Maximize long-term utility; tie-break by immediate score then resources.
         best = max(candidates, key=lambda c: (c[4], c[2], c[3]))
         elapsed = time.time() - self._solver_start_time
-        print(
-            f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] BEST: {best[0].upper()} utility={best[4]:.2f} score={best[2]} "
-            f"| Total time: {elapsed:.2f}s | Total nodes: {self._nodes_checked}\n"
-        )
+        if self.verbose:
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] BEST: {best[0].upper()} utility={best[4]:.2f} score={best[2]} "
+                f"| Total time: {elapsed:.2f}s | Total nodes: {self._nodes_checked}\n"
+            )
         return best[0], best[1], best[2], best[3]
+
+    def _get_path_candidate_colors(
+        self, state: GameState, fallback_to_present: bool
+    ) -> List[CellType]:
+        """Return colors to evaluate for pathing from this state."""
+        adjacent_colors = state.get_adjacent_resource_types()
+        if adjacent_colors:
+            return adjacent_colors
+        if fallback_to_present:
+            return state.get_present_resource_types()
+        return []
+
+    def _log_state_debug(
+        self,
+        label: str,
+        state: GameState,
+        present_colors: Optional[List[CellType]] = None,
+        adjacent_colors: Optional[List[CellType]] = None,
+        path_colors: Optional[List[CellType]] = None,
+    ) -> None:
+        """Print board and candidate summary for debugging."""
+        if not self.DEBUG_SOLVER_STATE or not self.verbose:
+            return
+
+        present = present_colors or state.get_present_resource_types()
+        adjacent = adjacent_colors or state.get_adjacent_resource_types()
+        candidates = path_colors or self._get_path_candidate_colors(
+            state, fallback_to_present=True
+        )
+
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [Solver][DEBUG] {label}")
+        print(
+            f"[Solver][DEBUG] player={state.player_pos} turn={state.turn} "
+            f"harvest={state.harvest_charges} pending_chests={state.pending_chests}"
+        )
+        print(
+            f"[Solver][DEBUG] present={[c.name for c in present]} "
+            f"adjacent={[c.name for c in adjacent]} "
+            f"path_candidates={[c.name for c in candidates]}"
+        )
+        print(f"[Solver][DEBUG] Board:\n{state.format_board_state()}")
 
     def _best_immediate_score(self, state: GameState) -> int:
         """Compute the best immediate score (no lookahead) for a given state."""
@@ -135,18 +205,19 @@ class PathSolver:
         if cached is not None:
             return cached
 
-        solver = PathSolver(state)
+        solver = PathSolver(state, verbose=False)
         start_pos = state.player_pos
         best_score = 0
 
-        for color in RESOURCE_TYPES:
+        path_colors = self._get_path_candidate_colors(state, fallback_to_present=True)
+        for color in path_colors:
             _, score, _ = solver._find_best_path_for_color(start_pos, color)
             if score > best_score:
                 best_score = score
 
         state.refresh_harvest_charges()
         if state.harvest_charges > 0:
-            _, harvest_resources = state.get_most_abundant_resource()
+            _, harvest_resources = state.get_most_abundant_resources_with_ties()
             best_score = max(best_score, harvest_resources * 50)
 
         self._immediate_score_cache[key] = best_score
@@ -163,7 +234,7 @@ class PathSolver:
             return 0.0
 
         sim_state = self.game_state.copy()
-        _, _, jelly_pending, chest_pending = sim_state.execute_turn(path)
+        _, _, jelly_pending, chest_pending = sim_state.execute_turn(path, debug=False)
 
         if not jelly_pending and chest_pending <= 0:
             sim_state.apply_gravity()
@@ -276,7 +347,7 @@ class PathSolver:
             is_better = (score > best_score) or (
                 score == best_score and resources > best_resources
             )
-            if is_better and self._solver_start_time is not None:
+            if is_better and self._solver_start_time is not None and self.verbose:
                 elapsed = time.time() - self._solver_start_time
                 print(
                     f"[{datetime.now().strftime('%H:%M:%S')}]   [Update] New best for {color.name}: score={score} resources={resources} "
@@ -415,10 +486,11 @@ class PathSolver:
             total_chests,
         )
         elapsed = time.time() - (self._solver_start_time or time.time())
-        print(
-            f"[{datetime.now().strftime('%H:%M:%S')}]   [Search] DFS complete for {color.name}: best_score={best_score} "
-            f"best_resources={best_resources} | {elapsed:.2f}s"
-        )
+        if self.verbose:
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}]   [Search] DFS complete for {color.name}: best_score={best_score} "
+                f"best_resources={best_resources} | {elapsed:.2f}s"
+            )
 
         best_path: List[Tuple[int, int]] = []
         for idx in best_path_idx:
