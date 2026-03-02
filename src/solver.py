@@ -1,6 +1,7 @@
 """Pathfinding solver for finding optimal game moves."""
 
 import time
+from datetime import datetime
 from typing import Dict, List, Tuple, Set, Optional
 from src.models import CellType, RESOURCE_TYPES, GameConfig
 from src.game import GameState
@@ -69,7 +70,9 @@ class PathSolver:
         start_pos = self.game_state.player_pos
         candidates: List[Tuple[str, List[Tuple[int, int]], int, int, float]] = []
 
-        print(f"\n[Solver] Starting path search...")
+        print(
+            f"\n[{datetime.now().strftime('%H:%M:%S')}] [Solver] Starting path search..."
+        )
 
         # Path candidates (one per locked color), evaluated with one-turn lookahead.
         for color in RESOURCE_TYPES:
@@ -79,7 +82,7 @@ class PathSolver:
             candidates.append(("path", path, score, resources, utility))
             elapsed = time.time() - self._solver_start_time
             print(
-                f"[Solver] Checked {color.name}: score={score}, utility={utility:.2f}"
+                f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] Checked {color.name}: score={score}, utility={utility:.2f}"
                 f" | Elapsed: {elapsed:.2f}s | Nodes: {self._nodes_checked}"
             )
 
@@ -111,14 +114,16 @@ class PathSolver:
 
         if not candidates:
             elapsed = time.time() - self._solver_start_time
-            print(f"[Solver] No candidates found. Time: {elapsed:.2f}s")
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] No candidates found. Time: {elapsed:.2f}s"
+            )
             return "path", [start_pos], 0, 0
 
         # Maximize long-term utility; tie-break by immediate score then resources.
         best = max(candidates, key=lambda c: (c[4], c[2], c[3]))
         elapsed = time.time() - self._solver_start_time
         print(
-            f"[Solver] BEST: {best[0].upper()} utility={best[4]:.2f} score={best[2]} "
+            f"[{datetime.now().strftime('%H:%M:%S')}] [Solver] BEST: {best[0].upper()} utility={best[4]:.2f} score={best[2]} "
             f"| Total time: {elapsed:.2f}s | Total nodes: {self._nodes_checked}\n"
         )
         return best[0], best[1], best[2], best[3]
@@ -274,7 +279,7 @@ class PathSolver:
             if is_better and self._solver_start_time is not None:
                 elapsed = time.time() - self._solver_start_time
                 print(
-                    f"  [Update] New best for {color.name}: score={score} resources={resources} "
+                    f"[{datetime.now().strftime('%H:%M:%S')}]   [Update] New best for {color.name}: score={score} resources={resources} "
                     f"| {elapsed:.2f}s elapsed | {self._nodes_checked} nodes"
                 )
             return is_better
@@ -411,7 +416,7 @@ class PathSolver:
         )
         elapsed = time.time() - (self._solver_start_time or time.time())
         print(
-            f"  [Search] DFS complete for {color.name}: best_score={best_score} "
+            f"[{datetime.now().strftime('%H:%M:%S')}]   [Search] DFS complete for {color.name}: best_score={best_score} "
             f"best_resources={best_resources} | {elapsed:.2f}s"
         )
 

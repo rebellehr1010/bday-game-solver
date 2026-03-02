@@ -154,6 +154,11 @@ class GameGUI:
         )
         self.finish_placement_button.grid(row=7, column=0, sticky="ew", pady=(0, 5))
 
+        self.solver_timer_label = ttk.Label(
+            left_panel, text="Solver Time: --", font=("Arial", 11)
+        )
+        self.solver_timer_label.grid(row=8, column=0, sticky="w", pady=(5, 0))
+
         self.optimal_label = ttk.Label(
             left_panel, text="Optimal: --", font=("Arial", 11), wraplength=180
         )
@@ -434,7 +439,30 @@ class GameGUI:
             if self.game_state.harvest_charges <= 0:
                 messagebox.showwarning("No Charges", "No harvest charges available.")
                 return
-            _, _, _, chest_pending = self.game_state.execute_harvest()
+
+            # Check for ties in harvest
+            tied_resources, count = (
+                self.game_state.get_most_abundant_resources_with_ties()
+            )
+            if len(tied_resources) > 1:
+                chosen = self._ask_user_harvest_choice(tied_resources)
+                if chosen is None:
+                    return  # User cancelled
+                # Execute harvest for chosen resource
+                points = count * 50
+                for row in range(self.game_state.grid_size):
+                    for col in range(self.game_state.grid_size):
+                        if self.game_state.grid[row][col] == chosen:
+                            self.game_state.grid[row][col] = CellType.EMPTY
+                self.game_state.score += points
+                self.game_state.harvest_uses += 1
+                self.game_state.total_normal_resources_collected += count
+                self.game_state._update_chest_progress(count)
+                self.game_state._recalculate_harvest_charges()
+                chest_pending = self.game_state.pending_chests
+            else:
+                _, _, _, chest_pending = self.game_state.execute_harvest()
+
             self._draw_grid()
             if chest_pending > 0:
                 self._enter_bonus_placement(False, chest_pending)
@@ -589,6 +617,53 @@ class GameGUI:
         self.finish_placement_button.config(state=tk.DISABLED)
         self.execute_turn_button.config(state=tk.DISABLED)
 
+    def _ask_user_harvest_choice(
+        self, tied_resources: List[CellType]
+    ) -> Optional[CellType]:
+        """Show dialog asking user to choose which resource to harvest from tied options."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Harvest Tie")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        result = [None]  # Use list to capture result from button callback
+
+        label = ttk.Label(
+            dialog,
+            text="Multiple resources are tied for most abundant.\\nWhich would you like to harvest?",
+            padding=20,
+        )
+        label.pack()
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=(0, 20), padx=20)
+
+        def make_choice(resource):
+            result[0] = resource
+            dialog.destroy()
+
+        for i, resource in enumerate(tied_resources):
+            color = CELL_COLORS.get(resource, "white")
+            btn = tk.Button(
+                button_frame,
+                text=resource.name.replace("_", " "),
+                bg=color,
+                width=15,
+                height=2,
+                command=lambda r=resource: make_choice(r),
+            )
+            btn.grid(row=i // 2, column=i % 2, padx=5, pady=5)
+
+        dialog.update_idletasks()
+        width = dialog.winfo_width()
+        height = dialog.winfo_height()
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry(f"+{x}+{y}")
+
+        dialog.wait_window()
+        return result[0]
+
     def _place_bonus_at(self, row: int, col: int) -> None:
         """Place a pending jelly or chest, then apply gravity when all are placed."""
         if (row, col) == self.game_state.player_pos:
@@ -629,7 +704,14 @@ class GameGUI:
         if self.game_over:
             return
 
+        import time
+
+        start_time = time.time()
         action, path, score, resources = self.solver.find_optimal_path()
+        elapsed = time.time() - start_time
+
+        self.solver_timer_label.config(text=f"Solver Time: {elapsed:.2f}s")
+
         self.optimal_action = action
         if action == "harvest":
             self.optimal_path = []
