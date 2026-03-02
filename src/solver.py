@@ -1,6 +1,7 @@
 """Pathfinding solver for finding optimal game moves."""
 
-from typing import List, Tuple, Set, Optional
+import time
+from typing import Dict, List, Tuple, Set, Optional
 from src.models import CellType, RESOURCE_TYPES, GameConfig
 from src.game import GameState
 
@@ -12,10 +13,47 @@ class PathSolver:
     HARVEST_CAP_BONUS = 40
     HARVEST_EARLY_USE_PENALTY = 40
     MAX_JELLY_PLACEMENT_SAMPLES = 10
-    MAX_DFS_NODES_PER_COLOR = 120000
 
     def __init__(self, game_state: GameState):
         self.game_state = game_state
+        self._neighbors_by_index = self._build_neighbor_index_table()
+        self._immediate_score_cache: Dict[Tuple, int] = {}
+        self._solver_start_time: Optional[float] = None
+        self._nodes_checked = 0
+
+    def _build_neighbor_index_table(self) -> Dict[int, List[int]]:
+        """Precompute neighbor indices for each board index."""
+        size = self.game_state.grid_size
+        table: Dict[int, List[int]] = {}
+        for row in range(size):
+            for col in range(size):
+                idx = (row * size) + col
+                neighbors: List[int] = []
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr = row + dr
+                        nc = col + dc
+                        if 0 <= nr < size and 0 <= nc < size:
+                            neighbors.append((nr * size) + nc)
+                table[idx] = neighbors
+        return table
+
+    def _state_cache_key(self, state: GameState) -> Tuple:
+        """Build a deterministic hashable key for immediate-score cache."""
+        flat_grid: List[int] = []
+        for row in state.grid:
+            for cell in row:
+                flat_grid.append(cell.value)
+        return (
+            tuple(flat_grid),
+            state.player_pos,
+            state.total_normal_resources_collected,
+            state.harvest_uses,
+            state.pending_chests,
+            state.total_materials_for_chest,
+        )
 
     def find_optimal_path(self) -> Tuple[str, List[Tuple[int, int]], int, int]:
         """
@@ -25,8 +63,13 @@ class PathSolver:
             (action, path, points_earned, resources_count)
             action is either "path" or "harvest"
         """
+        self._solver_start_time = time.time()
+        self._nodes_checked = 0
+        self._immediate_score_cache = {}
         start_pos = self.game_state.player_pos
         candidates: List[Tuple[str, List[Tuple[int, int]], int, int, float]] = []
+
+        print(f"\n[Solver] Starting path search...")
 
         # Path candidates (one per locked color), evaluated with one-turn lookahead.
         for color in RESOURCE_TYPES:
@@ -34,6 +77,11 @@ class PathSolver:
             next_turn_score = self._estimate_next_turn_after_path(path)
             utility = score + (self.LOOKAHEAD_WEIGHT * next_turn_score)
             candidates.append(("path", path, score, resources, utility))
+            elapsed = time.time() - self._solver_start_time
+            print(
+                f"[Solver] Checked {color.name}: score={score}, utility={utility:.2f}"
+                f" | Elapsed: {elapsed:.2f}s | Nodes: {self._nodes_checked}"
+            )
 
         # Harvest candidate, also evaluated with one-turn lookahead.
         self.game_state.refresh_harvest_charges()
@@ -62,15 +110,26 @@ class PathSolver:
             )
 
         if not candidates:
+            elapsed = time.time() - self._solver_start_time
+            print(f"[Solver] No candidates found. Time: {elapsed:.2f}s")
             return "path", [start_pos], 0, 0
 
         # Maximize long-term utility; tie-break by immediate score then resources.
         best = max(candidates, key=lambda c: (c[4], c[2], c[3]))
+        elapsed = time.time() - self._solver_start_time
+        print(
+            f"[Solver] BEST: {best[0].upper()} utility={best[4]:.2f} score={best[2]} "
+            f"| Total time: {elapsed:.2f}s | Total nodes: {self._nodes_checked}\n"
+        )
         return best[0], best[1], best[2], best[3]
 
-    @staticmethod
-    def _best_immediate_score(state: GameState) -> int:
+    def _best_immediate_score(self, state: GameState) -> int:
         """Compute the best immediate score (no lookahead) for a given state."""
+        key = self._state_cache_key(state)
+        cached = self._immediate_score_cache.get(key)
+        if cached is not None:
+            return cached
+
         solver = PathSolver(state)
         start_pos = state.player_pos
         best_score = 0
@@ -85,6 +144,7 @@ class PathSolver:
             _, harvest_resources = state.get_most_abundant_resource()
             best_score = max(best_score, harvest_resources * 50)
 
+        self._immediate_score_cache[key] = best_score
         return best_score
 
     def _estimate_next_turn_after_path(self, path: List[Tuple[int, int]]) -> float:
@@ -185,109 +245,178 @@ class PathSolver:
         Returns:
             (path, points_earned, resources_count)
         """
-        best_path = [start]
+        size = self.game_state.grid_size
+        grid = self.game_state.grid
+        start_idx = (start[0] * size) + start[1]
+
+        best_path_idx = [start_idx]
         best_score = 0
         best_resources = 0
-        nodes_explored = 0
+
+        resource_types = set(RESOURCE_TYPES)
+
+        total_resources = 0
+        total_chests = 0
+        for row in range(size):
+            for col in range(size):
+                if (row, col) == start:
+                    continue
+                cell = grid[row][col]
+                if cell in resource_types:
+                    total_resources += 1
+                elif cell == CellType.CHEST:
+                    total_chests += 1
+
+        def better_candidate(score: int, resources: int) -> bool:
+            is_better = (score > best_score) or (
+                score == best_score and resources > best_resources
+            )
+            if is_better and self._solver_start_time is not None:
+                elapsed = time.time() - self._solver_start_time
+                print(
+                    f"  [Update] New best for {color.name}: score={score} resources={resources} "
+                    f"| {elapsed:.2f}s elapsed | {self._nodes_checked} nodes"
+                )
+            return is_better
+
+        seen_states: Set[Tuple[int, int, int]] = set()
 
         def dfs(
-            current_pos: Tuple[int, int],
-            visited: Set[Tuple[int, int]],
-            path: List[Tuple[int, int]],
+            current_idx: int,
+            visited_mask: int,
+            path_idx: List[int],
             score: int,
             resources: int,
             chests: int,
             locked_color: Optional[CellType],
-        ):
-            nonlocal best_path, best_score, best_resources, nodes_explored
+            rem_resources: int,
+            rem_chests: int,
+        ) -> None:
+            nonlocal best_path_idx, best_score, best_resources
+            self._nodes_checked += 1
 
-            if nodes_explored >= self.MAX_DFS_NODES_PER_COLOR:
-                return
-            nodes_explored += 1
-
-            if score > best_score or (
-                score == best_score and resources > best_resources
-            ):
+            if better_candidate(score, resources):
                 best_score = score
                 best_resources = resources
-                best_path = path.copy()
+                best_path_idx = path_idx.copy()
 
-            # Try all neighbors
-            for neighbor in self.game_state.get_neighbors(
-                current_pos[0], current_pos[1]
-            ):
-                if neighbor in visited:
+            locked_value = -1 if locked_color is None else locked_color.value
+            state_key = (current_idx, visited_mask, locked_value)
+            if state_key in seen_states:
+                return
+            seen_states.add(state_key)
+
+            max_total_resources = resources + rem_resources
+            max_total_chests = max(
+                0, (max_total_resources // GameConfig.CHEST_COST_RESOURCES) - chests
+            )
+            chest_gain_cap = min(rem_chests, max_total_chests)
+            optimistic_score = (
+                score
+                + (rem_resources * 50)
+                + (chest_gain_cap * GameConfig.CHEST_SCORE_BONUS)
+            )
+
+            if optimistic_score < best_score:
+                return
+            if optimistic_score == best_score and max_total_resources <= best_resources:
+                return
+
+            chest_moves: List[int] = []
+            resource_moves: List[int] = []
+            jelly_moves: List[int] = []
+            empty_moves: List[int] = []
+
+            for neighbor_idx in self._neighbors_by_index[current_idx]:
+                if neighbor_idx == start_idx:
                     continue
-                if neighbor == start:  # Can't revisit start
-                    continue
-                if self.game_state.is_blocked(neighbor[0], neighbor[1]):
+                if (visited_mask >> neighbor_idx) & 1:
                     continue
 
-                # Check jelly
-                if self.game_state.is_jelly(neighbor[0], neighbor[1]):
-                    # Jelly doesn't contribute points but unlocks color
-                    visited.add(neighbor)
-                    path.append(neighbor)
-                    dfs(neighbor, visited, path, score, resources, chests, None)
-                    path.pop()
-                    visited.remove(neighbor)
+                row = neighbor_idx // size
+                col = neighbor_idx % size
+                cell = grid[row][col]
+
+                if cell == CellType.BLOCKED:
                     continue
 
-                if self.game_state.is_chest(neighbor[0], neighbor[1]):
+                if cell == CellType.CHEST:
+                    chest_moves.append(neighbor_idx)
+                elif cell in resource_types:
+                    if locked_color is not None and cell != locked_color:
+                        continue
+                    resource_moves.append(neighbor_idx)
+                elif cell == CellType.JELLY:
+                    jelly_moves.append(neighbor_idx)
+                else:
+                    empty_moves.append(neighbor_idx)
+
+            ordered_moves = chest_moves + resource_moves + jelly_moves + empty_moves
+
+            for neighbor_idx in ordered_moves:
+                row = neighbor_idx // size
+                col = neighbor_idx % size
+                cell = grid[row][col]
+
+                next_score = score
+                next_resources = resources
+                next_chests = chests
+                next_locked = locked_color
+                next_rem_resources = rem_resources
+                next_rem_chests = rem_chests
+
+                if cell == CellType.CHEST:
                     effective_resources = resources - (
                         chests * GameConfig.CHEST_COST_RESOURCES
                     )
                     if effective_resources < GameConfig.CHEST_COST_RESOURCES:
                         continue
+                    next_score += GameConfig.CHEST_SCORE_BONUS
+                    next_chests += 1
+                    next_rem_chests -= 1
+                elif cell in resource_types:
+                    next_score += 50
+                    next_resources += 1
+                    next_rem_resources -= 1
+                    if locked_color is None:
+                        next_locked = cell
+                elif cell == CellType.JELLY:
+                    next_locked = None
 
-                    visited.add(neighbor)
-                    path.append(neighbor)
-                    dfs(
-                        neighbor,
-                        visited,
-                        path,
-                        score + GameConfig.CHEST_SCORE_BONUS,
-                        resources,
-                        chests + 1,
-                        locked_color,
-                    )
-                    path.pop()
-                    visited.remove(neighbor)
-                    continue
-
-                # Check resource
-                cell = self.game_state.grid[neighbor[0]][neighbor[1]]
-                if self.game_state.is_resource(neighbor[0], neighbor[1]):
-                    # Must match current locked color (if any)
-                    if locked_color is not None and cell != locked_color:
-                        continue
-
-                    new_score = score + 50
-                    new_resources = resources + 1
-                    new_locked_color = (
-                        locked_color if locked_color is not None else cell
-                    )
-                else:
-                    # Empty space
-                    new_score = score
-                    new_resources = resources
-                    new_locked_color = locked_color
-
-                visited.add(neighbor)
-                path.append(neighbor)
+                next_visited = visited_mask | (1 << neighbor_idx)
+                path_idx.append(neighbor_idx)
                 dfs(
-                    neighbor,
-                    visited,
-                    path,
-                    new_score,
-                    new_resources,
-                    chests,
-                    new_locked_color,
+                    neighbor_idx,
+                    next_visited,
+                    path_idx,
+                    next_score,
+                    next_resources,
+                    next_chests,
+                    next_locked,
+                    next_rem_resources,
+                    next_rem_chests,
                 )
-                path.pop()
-                visited.remove(neighbor)
+                path_idx.pop()
 
-        visited = {start}
-        dfs(start, visited, [start], 0, 0, 0, color)
+        dfs(
+            start_idx,
+            (1 << start_idx),
+            [start_idx],
+            0,
+            0,
+            0,
+            color,
+            total_resources,
+            total_chests,
+        )
+        elapsed = time.time() - (self._solver_start_time or time.time())
+        print(
+            f"  [Search] DFS complete for {color.name}: best_score={best_score} "
+            f"best_resources={best_resources} | {elapsed:.2f}s"
+        )
+
+        best_path: List[Tuple[int, int]] = []
+        for idx in best_path_idx:
+            best_path.append((idx // size, idx % size))
 
         return best_path, best_score, best_resources
