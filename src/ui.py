@@ -33,12 +33,14 @@ class GameGUI:
         self.hotbar = Hotbar()
 
         self.cell_size = GameConfig.CELL_SIZE
-        self.mode = "placement"  # placement, play, place_jelly, game_over
+        self.mode = "placement"  # placement, play, place_bonus, game_over
         self.current_path: List[Tuple[int, int]] = []
         self.optimal_path: List[Tuple[int, int]] = []
         self.optimal_action: Optional[str] = None
         self.blocked_locked = False
         self.game_over = False
+        self.pending_jelly = False
+        self.pending_chests = 0
 
         # Load images
         self._load_images()
@@ -62,6 +64,7 @@ class GameGUI:
             CellType.BRIGHT_PINK: "light_pink.jpg",
             CellType.DARK_BLUE: "dark_blue.jpg",
             CellType.JELLY: "rainbow.jpg",
+            CellType.CHEST: "lucky_chest.jpg",
         }
 
         self.tile_images: Dict[CellType, ImageTk.PhotoImage] = {}
@@ -131,20 +134,30 @@ class GameGUI:
         )
         self.normal_collected_label.grid(row=3, column=0, sticky="w", pady=(0, 10))
 
+        self.chest_pending_label = ttk.Label(
+            left_panel, text="Chests Pending: 0", font=("Arial", 12)
+        )
+        self.chest_pending_label.grid(row=4, column=0, sticky="w", pady=(0, 5))
+
+        self.chest_progress_label = ttk.Label(
+            left_panel, text="Chest Progress: 0/30", font=("Arial", 12)
+        )
+        self.chest_progress_label.grid(row=5, column=0, sticky="w", pady=(0, 10))
+
         self.execute_turn_button = ttk.Button(
             left_panel, text="Execute Turn", command=self._execute_turn
         )
-        self.execute_turn_button.grid(row=4, column=0, sticky="ew", pady=(0, 5))
+        self.execute_turn_button.grid(row=6, column=0, sticky="ew", pady=(0, 5))
 
         self.finish_placement_button = ttk.Button(
             left_panel, text="Finish Placement", command=self._finish_placement
         )
-        self.finish_placement_button.grid(row=5, column=0, sticky="ew", pady=(0, 5))
+        self.finish_placement_button.grid(row=7, column=0, sticky="ew", pady=(0, 5))
 
         self.optimal_label = ttk.Label(
             left_panel, text="Optimal: --", font=("Arial", 11), wraplength=180
         )
-        self.optimal_label.grid(row=7, column=0, sticky="w", pady=(10, 0))
+        self.optimal_label.grid(row=9, column=0, sticky="w", pady=(10, 0))
 
         # Right panel for board and hotbar
         right_panel = ttk.Frame(main_frame)
@@ -210,6 +223,16 @@ class GameGUI:
         )
         btn_jelly.pack(side=tk.TOP, padx=2, pady=2)
         self.hotbar_buttons[CellType.JELLY] = btn_jelly
+
+        btn_chest = tk.Button(
+            left_frame,
+            image=self.tile_images[CellType.CHEST],
+            relief=tk.RAISED,
+            borderwidth=2,
+            command=lambda: self._select_hotbar_item(CellType.CHEST),
+        )
+        btn_chest.pack(side=tk.TOP, padx=2, pady=2)
+        self.hotbar_buttons[CellType.CHEST] = btn_chest
 
         # Spacer column (empty gap)
         spacer_frame = ttk.Frame(self.hotbar_frame, width=20)
@@ -279,7 +302,7 @@ class GameGUI:
         if self.mode == "placement":
             self.hotbar.select(item)
             self._highlight_selected_hotbar()
-        elif self.mode == "place_jelly" and item == CellType.JELLY:
+        elif self.mode == "place_bonus" and item in {CellType.JELLY, CellType.CHEST}:
             self.hotbar.select(item)
             self._highlight_selected_hotbar()
 
@@ -385,13 +408,17 @@ class GameGUI:
 
             if self.game_state.grid[row][col] == CellType.JELLY:
                 self.game_state.jellies.discard((row, col))
+            if self.game_state.grid[row][col] == CellType.CHEST:
+                self.game_state.chests.discard((row, col))
             self.game_state.grid[row][col] = selected
             if selected == CellType.JELLY:
                 self.game_state.jellies.add((row, col))
+            if selected == CellType.CHEST:
+                self.game_state.chests.add((row, col))
             self._draw_grid()
 
-        elif self.mode == "place_jelly":
-            self._place_jelly_at(row, col)
+        elif self.mode == "place_bonus":
+            self._place_bonus_at(row, col)
 
     def _execute_turn(self) -> None:
         """Execute the current path as a turn."""
@@ -407,11 +434,15 @@ class GameGUI:
             if self.game_state.harvest_charges <= 0:
                 messagebox.showwarning("No Charges", "No harvest charges available.")
                 return
-            self.game_state.execute_harvest()
-            self.game_state.apply_gravity()
+            _, _, _, chest_pending = self.game_state.execute_harvest()
             self._draw_grid()
+            if chest_pending > 0:
+                self._enter_bonus_placement(False, chest_pending)
+            else:
+                self.game_state.apply_gravity()
+                self._draw_grid()
+                self._enter_placement_mode(initial=False)
             self._update_score()
-            self._enter_placement_mode(initial=False)
             return
 
         if len(self.optimal_path) < 2:
@@ -424,7 +455,9 @@ class GameGUI:
             return
 
         self.current_path = self.optimal_path.copy()
-        _, _, jelly_pending = self.game_state.execute_turn(self.current_path)
+        _, _, jelly_pending, chest_pending = self.game_state.execute_turn(
+            self.current_path
+        )
 
         self.current_path = []
         self.optimal_path = []
@@ -435,8 +468,8 @@ class GameGUI:
             self._end_game()
             return
 
-        if jelly_pending:
-            self._enter_jelly_placement()
+        if jelly_pending or chest_pending > 0:
+            self._enter_bonus_placement(jelly_pending, chest_pending)
         else:
             self.game_state.apply_gravity()
             self._draw_grid()
@@ -456,6 +489,10 @@ class GameGUI:
         allowed_items = set(HOTBAR_ITEMS)
         if self.blocked_locked and CellType.BLOCKED in allowed_items:
             allowed_items.remove(CellType.BLOCKED)
+        if CellType.JELLY in allowed_items:
+            allowed_items.remove(CellType.JELLY)
+        if self.game_state.pending_chests <= 0 and CellType.CHEST in allowed_items:
+            allowed_items.remove(CellType.CHEST)
         self._set_hotbar_allowed_items(allowed_items)
 
         self.finish_placement_button.config(state=tk.NORMAL)
@@ -477,39 +514,92 @@ class GameGUI:
             )
             return
 
+        is_initial_placement = not self.blocked_locked
+        if is_initial_placement:
+            chest_count = 0
+            for row in range(GameConfig.GRID_SIZE):
+                for col in range(GameConfig.GRID_SIZE):
+                    if (row, col) == self.game_state.player_pos:
+                        continue
+                    if self.game_state.grid[row][col] == CellType.CHEST:
+                        chest_count += 1
+
+            if chest_count != 1:
+                messagebox.showwarning(
+                    "Chest Required",
+                    "Initial setup must contain exactly one lucky chest.",
+                )
+                return
+
+            # Consume the initial chest requirement now that exactly one is placed.
+            if self.game_state.pending_chests > 0:
+                self.game_state.pending_chests -= 1
+                self._update_score()
+
         self.blocked_locked = True
         self.mode = "play"
         self.finish_placement_button.config(state=tk.DISABLED)
         self.execute_turn_button.config(state=tk.NORMAL)
         # Hotbar stays visible but disabled
         self._set_hotbar_allowed_items(set())
-        self._compute_optimal_move()
+        if self.game_state.pending_chests > 0:
+            self._enter_bonus_placement(False, self.game_state.pending_chests)
+        else:
+            self._compute_optimal_move()
 
-    def _enter_jelly_placement(self) -> None:
-        """Switch to jelly placement mode before gravity."""
-        self.mode = "place_jelly"
-        # Hotbar is always visible
-        self.hotbar.select(CellType.JELLY)
+    def _enter_bonus_placement(self, jelly_pending: bool, chest_pending: int) -> None:
+        """Switch to bonus placement mode (jelly and/or chest) before gravity."""
+        self.mode = "place_bonus"
+        self.pending_jelly = jelly_pending
+        self.pending_chests = chest_pending
+
+        allowed_items = set()
+        if self.pending_jelly:
+            allowed_items.add(CellType.JELLY)
+        if self.pending_chests > 0:
+            allowed_items.add(CellType.CHEST)
+
+        if CellType.JELLY in allowed_items:
+            self.hotbar.select(CellType.JELLY)
+        elif CellType.CHEST in allowed_items:
+            self.hotbar.select(CellType.CHEST)
+
         self._highlight_selected_hotbar()
-        self._set_hotbar_allowed_items({CellType.JELLY})
+        self._set_hotbar_allowed_items(allowed_items)
         self.finish_placement_button.config(state=tk.DISABLED)
         self.execute_turn_button.config(state=tk.DISABLED)
 
-    def _place_jelly_at(self, row: int, col: int) -> None:
-        """Place the pending jelly, apply gravity, then enter post-turn placement."""
+    def _place_bonus_at(self, row: int, col: int) -> None:
+        """Place a pending jelly or chest, then apply gravity when all are placed."""
         if (row, col) == self.game_state.player_pos:
             messagebox.showwarning(
-                "Invalid Placement", "Cannot place jelly on the player tile."
+                "Invalid Placement", "Cannot place bonus tiles on the player tile."
             )
             return
         if self.game_state.grid[row][col] != CellType.EMPTY:
             messagebox.showwarning(
-                "Invalid Placement", "Jelly must be placed on an empty tile."
+                "Invalid Placement", "Bonus tiles must be placed on an empty tile."
             )
             return
 
-        self.game_state.grid[row][col] = CellType.JELLY
-        self.game_state.jellies.add((row, col))
+        selected = self.hotbar.get_selected()
+        if selected == CellType.JELLY:
+            self.game_state.grid[row][col] = CellType.JELLY
+            self.game_state.jellies.add((row, col))
+            self.pending_jelly = False
+        elif selected == CellType.CHEST:
+            self.game_state.grid[row][col] = CellType.CHEST
+            self.game_state.chests.add((row, col))
+            if self.pending_chests > 0:
+                self.pending_chests -= 1
+
+        self.game_state.pending_chests = self.pending_chests
+
+        if self.pending_jelly or self.pending_chests > 0:
+            self._enter_bonus_placement(self.pending_jelly, self.pending_chests)
+            self._draw_grid()
+            return
+
         self.game_state.apply_gravity()
         self._draw_grid()
         self._enter_placement_mode(initial=False)
@@ -558,4 +648,13 @@ class GameGUI:
             text=(
                 f"Normal Collected: {self.game_state.total_normal_resources_collected}"
             )
+        )
+        self.chest_pending_label.config(
+            text=f"Chests Pending: {self.game_state.pending_chests}"
+        )
+        progress = (
+            self.game_state.total_materials_for_chest % GameConfig.RESOURCES_FOR_CHEST
+        )
+        self.chest_progress_label.config(
+            text=(f"Chest Progress: {progress}/{GameConfig.RESOURCES_FOR_CHEST}")
         )

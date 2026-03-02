@@ -16,6 +16,7 @@ class CellType(Enum):
     BRIGHT_PINK = 6  # 4-petal flower: +
     DARK_BLUE = 7  # Heart: <3
     JELLY = 8  # Rainbow jelly: o
+    CHEST = 9  # Lucky chest
 
 
 # Color display properties: (hex_color, icon_symbol)
@@ -29,6 +30,7 @@ CELL_COLORS = {
     CellType.BRIGHT_PINK: ("#FF1493", "+"),  # Deep pink
     CellType.DARK_BLUE: ("#00008B", "<3"),  # Dark blue
     CellType.JELLY: ("#FFFFFF", ""),  # Rainbow jelly drawn as stripes in UI
+    CellType.CHEST: ("#C9A227", "C"),  # Lucky chest
 }
 
 # Standard resources (excludes JELLY, EMPTY, BLOCKED)
@@ -51,6 +53,7 @@ HOTBAR_ITEMS = [
     CellType.BRIGHT_PINK,
     CellType.DARK_BLUE,
     CellType.JELLY,
+    CellType.CHEST,
 ]
 
 
@@ -61,6 +64,10 @@ class GameConfig:
     PLAYER_START_POS = (6, 3)  # Middle bottom (row, col)
     CELL_SIZE = 60
     RESOURCES_FOR_JELLY = 10  # Resources needed per turn to spawn jelly
+    RESOURCES_FOR_CHEST = 30
+    CHEST_COST_RESOURCES = 5
+    CHEST_SCORE_BONUS = 500
+    CHEST_HARVEST_BONUS = 50
     HARVEST_RESOURCES_PER_CHARGE = 50
     MAX_HARVEST_CHARGES = 3
     MAX_TURNS = 10

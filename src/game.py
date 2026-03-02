@@ -18,7 +18,10 @@ class GameState:
         self.score = 0
         self.turn = 1
         self.jellies: Set[Tuple[int, int]] = set()  # Track jelly positions
+        self.chests: Set[Tuple[int, int]] = set()  # Track chest positions
         self.total_normal_resources_collected = 0
+        self.total_materials_for_chest = 0
+        self.pending_chests = 1
         self.harvest_uses = 0
         self.harvest_charges = 0
 
@@ -81,6 +84,10 @@ class GameState:
         """Check if a cell contains a rainbow jelly."""
         return self.grid[row][col] == CellType.JELLY
 
+    def is_chest(self, row: int, col: int) -> bool:
+        """Check if a cell contains a lucky chest."""
+        return self.grid[row][col] == CellType.CHEST
+
     def get_neighbors(self, row: int, col: int) -> List[Tuple[int, int]]:
         """Get all 8 adjacent positions (orthogonal + diagonal)."""
         neighbors = []
@@ -133,12 +140,26 @@ class GameState:
 
         # Check color locking with jelly support
         locked_color: Optional[CellType] = None
+        resources_collected = 0
+        chests_collected = 0
         for pos in path[1:]:  # Skip start position
             cell = self.grid[pos[0]][pos[1]]
 
             if self.is_jelly(pos[0], pos[1]):
                 # Rainbow jelly unlocks color for next move
                 locked_color = None
+                continue
+
+            if self.is_chest(pos[0], pos[1]):
+                effective_resources = resources_collected - (
+                    chests_collected * GameConfig.CHEST_COST_RESOURCES
+                )
+                if effective_resources < GameConfig.CHEST_COST_RESOURCES:
+                    return (
+                        False,
+                        "Need at least 5 materials before collecting a chest",
+                    )
+                chests_collected += 1
                 continue
 
             if self.is_resource(pos[0], pos[1]):
@@ -149,6 +170,7 @@ class GameState:
                         False,
                         "Cannot collect different colors in one turn (unless separated by jelly)",
                     )
+                resources_collected += 1
 
         # Check no revisiting start position
         if self.player_pos in path[1:]:
@@ -156,19 +178,20 @@ class GameState:
 
         return True, "Valid path"
 
-    def execute_turn(self, path: List[Tuple[int, int]]) -> Tuple[int, int, bool]:
+    def execute_turn(self, path: List[Tuple[int, int]]) -> Tuple[int, int, bool, int]:
         """
         Execute a turn, collecting resources and returning
-        (points_earned, resources_collected, jelly_pending).
+        (points_earned, resources_collected, jelly_pending, chest_pending).
 
         Only standard resources count toward points and collected count.
         Jellies do not contribute to these counts.
 
         Returns:
-            (points_earned, resources_collected_count, jelly_pending)
+            (points_earned, resources_collected_count, jelly_pending, chest_pending)
         """
         collected_positions = []
         resources_count = 0
+        chests_collected = 0
         points = 0
 
         for pos in path[1:]:  # Skip start position
@@ -180,6 +203,15 @@ class GameState:
                 # Jelly is collected but doesn't count for points/resources
                 collected_positions.append(pos)
                 self.jellies.discard(pos)
+            elif self.is_chest(pos[0], pos[1]):
+                effective_resources = resources_count - (
+                    chests_collected * GameConfig.CHEST_COST_RESOURCES
+                )
+                if effective_resources >= GameConfig.CHEST_COST_RESOURCES:
+                    collected_positions.append(pos)
+                    chests_collected += 1
+                    points += GameConfig.CHEST_SCORE_BONUS
+                    self.chests.discard(pos)
 
         # Remove collected resources and jellies
         for pos in collected_positions:
@@ -189,31 +221,40 @@ class GameState:
         self.player_pos = path[-1]
         self.score += points
         self.turn += 1
-        self.total_normal_resources_collected += resources_count
+        self.total_normal_resources_collected += resources_count + (
+            chests_collected * GameConfig.CHEST_HARVEST_BONUS
+        )
         self._recalculate_harvest_charges()
 
+        self._update_chest_progress(resources_count + chests_collected)
+
         # Check if we collected 10+ resources; if so, a jelly must be placed
-        jelly_pending = resources_count >= GameConfig.RESOURCES_FOR_JELLY
+        effective_resources = resources_count - (
+            chests_collected * GameConfig.CHEST_COST_RESOURCES
+        )
+        if effective_resources < 0:
+            effective_resources = 0
+        jelly_pending = effective_resources >= GameConfig.RESOURCES_FOR_JELLY
 
-        return points, resources_count, jelly_pending
+        return points, resources_count, jelly_pending, self.pending_chests
 
-    def execute_harvest(self) -> Tuple[int, int, Optional[CellType]]:
+    def execute_harvest(self) -> Tuple[int, int, Optional[CellType], int]:
         """
         Use one harvest charge to collect all tiles of the most abundant resource.
 
         Returns:
-            (points_earned, resources_collected_count, harvested_resource_type)
+            (points_earned, resources_collected_count, harvested_resource_type, chest_pending)
         """
         self._recalculate_harvest_charges()
         if self.harvest_charges <= 0:
-            return 0, 0, None
+            return 0, 0, None, self.pending_chests
 
         target_resource, count = self.get_most_abundant_resource()
 
         if target_resource is None or count == 0:
             self.harvest_uses += 1
             self._recalculate_harvest_charges()
-            return 0, 0, None
+            return 0, 0, None, self.pending_chests
 
         for row in range(self.grid_size):
             for col in range(self.grid_size):
@@ -223,21 +264,39 @@ class GameState:
         points = count * 50
         self.score += points
         self.harvest_uses += 1
+        self.total_normal_resources_collected += count
+        self._update_chest_progress(count)
         self._recalculate_harvest_charges()
 
-        return points, count, target_resource
+        return points, count, target_resource, self.pending_chests
+
+    def _update_chest_progress(self, materials_collected: int) -> None:
+        """Update chest progress and pending chest count based on collected materials."""
+        if materials_collected <= 0:
+            return
+        prev_total = self.total_materials_for_chest
+        self.total_materials_for_chest += materials_collected
+        prev_unlocks = prev_total // GameConfig.RESOURCES_FOR_CHEST
+        new_unlocks = self.total_materials_for_chest // GameConfig.RESOURCES_FOR_CHEST
+        newly_unlocked = new_unlocks - prev_unlocks
+        if newly_unlocked > 0:
+            self.pending_chests += newly_unlocked
 
     def apply_gravity(self) -> None:
         """Apply gravity to make resources fall down in columns."""
         player_row, player_col = self.player_pos
         for col in range(self.grid_size):
             jelly_rows = set()
+            chest_rows = set()
             # Collect non-blocked, non-empty cells from bottom to top
             stable_cells = []
             for row in range(self.grid_size - 1, -1, -1):
                 cell = self.grid[row][col]
                 if cell == CellType.JELLY:
                     jelly_rows.add(row)
+                    continue
+                if cell == CellType.CHEST:
+                    chest_rows.add(row)
                     continue
                 if cell != CellType.BLOCKED and cell != CellType.EMPTY:
                     stable_cells.append(cell)
@@ -248,6 +307,9 @@ class GameState:
                     continue
                 if row in jelly_rows:
                     self.grid[row][col] = CellType.JELLY
+                    continue
+                if row in chest_rows:
+                    self.grid[row][col] = CellType.CHEST
                     continue
                 self.grid[row][col] = CellType.EMPTY
 
@@ -262,6 +324,9 @@ class GameState:
                     if row in jelly_rows:
                         row -= 1
                         continue
+                    if row in chest_rows:
+                        row -= 1
+                        continue
                     if col == player_col and row == player_row:
                         row -= 1
                         continue
@@ -273,10 +338,13 @@ class GameState:
         # Ensure player tile is empty and rebuild jelly positions
         self.grid[player_row][player_col] = CellType.EMPTY
         self.jellies = set()
+        self.chests = set()
         for row in range(self.grid_size):
             for col in range(self.grid_size):
                 if self.grid[row][col] == CellType.JELLY:
                     self.jellies.add((row, col))
+                if self.grid[row][col] == CellType.CHEST:
+                    self.chests.add((row, col))
 
     def copy(self) -> "GameState":
         """Create a deep copy of the game state (for solver simulations)."""
@@ -286,9 +354,12 @@ class GameState:
         new_state.score = self.score
         new_state.turn = self.turn
         new_state.jellies = self.jellies.copy()
+        new_state.chests = self.chests.copy()
         new_state.total_normal_resources_collected = (
             self.total_normal_resources_collected
         )
+        new_state.total_materials_for_chest = self.total_materials_for_chest
+        new_state.pending_chests = self.pending_chests
         new_state.harvest_uses = self.harvest_uses
         new_state.harvest_charges = self.harvest_charges
         return new_state

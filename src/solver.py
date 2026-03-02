@@ -97,9 +97,9 @@ class PathSolver:
             return 0.0
 
         sim_state = self.game_state.copy()
-        _, _, jelly_pending = sim_state.execute_turn(path)
+        _, _, jelly_pending, chest_pending = sim_state.execute_turn(path)
 
-        if not jelly_pending:
+        if not jelly_pending and chest_pending <= 0:
             sim_state.apply_gravity()
             return float(self._best_immediate_score(sim_state))
 
@@ -127,8 +127,19 @@ class PathSolver:
         branch_scores: List[int] = []
         for pos in sampled_positions:
             branch = sim_state.copy()
-            branch.grid[pos[0]][pos[1]] = CellType.JELLY
-            branch.jellies.add(pos)
+
+            occupied = set()
+            if jelly_pending:
+                branch.grid[pos[0]][pos[1]] = CellType.JELLY
+                branch.jellies.add(pos)
+                occupied.add(pos)
+
+            if chest_pending > 0:
+                chest_positions = [p for p in sampled_positions if p not in occupied]
+                for chest_pos in chest_positions[:chest_pending]:
+                    branch.grid[chest_pos[0]][chest_pos[1]] = CellType.CHEST
+                    branch.chests.add(chest_pos)
+
             branch.apply_gravity()
             branch_scores.append(self._best_immediate_score(branch))
 
@@ -139,10 +150,11 @@ class PathSolver:
     def _estimate_next_turn_after_harvest(self) -> float:
         """Simulate harvest now, then estimate next-turn immediate potential."""
         sim_state = self.game_state.copy()
-        points, _, _ = sim_state.execute_harvest()
+        points, _, _, chest_pending = sim_state.execute_harvest()
         if points <= 0:
             return 0.0
-        sim_state.apply_gravity()
+        if chest_pending <= 0:
+            sim_state.apply_gravity()
         return float(self._best_immediate_score(sim_state))
 
     @staticmethod
@@ -182,6 +194,7 @@ class PathSolver:
             path: List[Tuple[int, int]],
             score: int,
             resources: int,
+            chests: int,
             locked_color: Optional[CellType],
         ):
             nonlocal best_path, best_score, best_resources
@@ -209,7 +222,29 @@ class PathSolver:
                     # Jelly doesn't contribute points but unlocks color
                     visited.add(neighbor)
                     path.append(neighbor)
-                    dfs(neighbor, visited, path, score, resources, None)
+                    dfs(neighbor, visited, path, score, resources, chests, None)
+                    path.pop()
+                    visited.remove(neighbor)
+                    continue
+
+                if self.game_state.is_chest(neighbor[0], neighbor[1]):
+                    effective_resources = resources - (
+                        chests * GameConfig.CHEST_COST_RESOURCES
+                    )
+                    if effective_resources < GameConfig.CHEST_COST_RESOURCES:
+                        continue
+
+                    visited.add(neighbor)
+                    path.append(neighbor)
+                    dfs(
+                        neighbor,
+                        visited,
+                        path,
+                        score + GameConfig.CHEST_SCORE_BONUS,
+                        resources,
+                        chests + 1,
+                        locked_color,
+                    )
                     path.pop()
                     visited.remove(neighbor)
                     continue
@@ -234,11 +269,19 @@ class PathSolver:
 
                 visited.add(neighbor)
                 path.append(neighbor)
-                dfs(neighbor, visited, path, new_score, new_resources, new_locked_color)
+                dfs(
+                    neighbor,
+                    visited,
+                    path,
+                    new_score,
+                    new_resources,
+                    chests,
+                    new_locked_color,
+                )
                 path.pop()
                 visited.remove(neighbor)
 
         visited = {start}
-        dfs(start, visited, [start], 0, 0, color)
+        dfs(start, visited, [start], 0, 0, 0, color)
 
         return best_path, best_score, best_resources
